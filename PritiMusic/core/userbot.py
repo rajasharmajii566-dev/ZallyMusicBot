@@ -61,7 +61,6 @@ class Userbot(Client):
                 # Try to join support chats
                 try:
                     await self.one.join_chat("unhealed_notess")
-                    await self.one.join_chat("unhealed_notess")
                     LOGGER(__name__).info("Assistant 1 joined support chats")
                 except Exception as e:
                     LOGGER(__name__).warning(f"Assistant 1 failed to join support chats: {e}")
@@ -69,7 +68,6 @@ class Userbot(Client):
                 # Check if LOGGER_ID is valid
                 if not config.LOGGER_ID:
                     LOGGER(__name__).error("LOGGER_ID is not set in config!")
-                    exit()
                 
                 LOGGER(__name__).info(f"Trying to send message to LOGGER_ID: {config.LOGGER_ID}")
                 
@@ -88,15 +86,15 @@ class Userbot(Client):
                     LOGGER(__name__).info("Assistant 1 successfully sent message to logger group")
                     
                 except Exception as e:
-                    LOGGER(__name__).error(f"Assistant 1 failed to access logger group. Error: {type(e).__name__}: {e}")
-                    LOGGER(__name__).error(
+                    LOGGER(__name__).warning(f"Assistant 1 failed to access logger group. Error: {type(e).__name__}: {e}")
+                    LOGGER(__name__).warning(
                         "Make sure:\n"
                         "1. LOGGER_ID is correct\n"
                         "2. Assistant account is added to the log group\n"
                         "3. Assistant is promoted as admin in log group\n"
-                        "4. Group privacy settings allow bots to send messages"
+                        "4. Group privacy settings allow bots to send messages\n"
+                        "(Continuing anyway — streaming in other chats still works.)"
                     )
-                    exit()
                 
                 assistants.append(1)
                 assistantids.append(self.one.id)
@@ -112,7 +110,6 @@ class Userbot(Client):
                 
                 try:
                     await self.two.join_chat("unhealed_notess")
-                    await self.two.join_chat("unhealed_notess")
                 except:
                     pass
                     
@@ -121,8 +118,7 @@ class Userbot(Client):
                 try:
                     await self.two.send_message(config.LOGGER_ID, "✅ Assistant 2 Started")
                 except Exception as e:
-                    LOGGER(__name__).error(f"Assistant 2 failed to access logger group: {e}")
-                    exit()
+                    LOGGER(__name__).warning(f"Assistant 2 failed to access logger group: {e}")
                     
                 self.two.id = self.two.me.id
                 self.two.name = self.two.me.mention
@@ -140,7 +136,6 @@ class Userbot(Client):
                 
                 try:
                     await self.three.join_chat("unhealed_notess")
-                    await self.three.join_chat("unhealed_notess")
                 except:
                     pass
                     
@@ -149,8 +144,7 @@ class Userbot(Client):
                 try:
                     await self.three.send_message(config.LOGGER_ID, "✅ Assistant 3 Started")
                 except Exception as e:
-                    LOGGER(__name__).error(f"Assistant 3 failed to access logger group: {e}")
-                    exit()
+                    LOGGER(__name__).warning(f"Assistant 3 failed to access logger group: {e}")
                     
                 self.three.id = self.three.me.id
                 self.three.name = self.three.me.mention
@@ -167,7 +161,6 @@ class Userbot(Client):
                 
                 try:
                     await self.four.join_chat("unhealed_notess")
-                    await self.four.join_chat("unhealed_notess")
                 except:
                     pass
                     
@@ -176,8 +169,7 @@ class Userbot(Client):
                 try:
                     await self.four.send_message(config.LOGGER_ID, "✅ Assistant 4 Started")
                 except Exception as e:
-                    LOGGER(__name__).error(f"Assistant 4 failed to access logger group: {e}")
-                    exit()
+                    LOGGER(__name__).warning(f"Assistant 4 failed to access logger group: {e}")
                     
                 self.four.id = self.four.me.id
                 self.four.name = self.four.me.mention
@@ -194,7 +186,6 @@ class Userbot(Client):
                 
                 try:
                     await self.five.join_chat("unhealed_notess")
-                    await self.five.join_chat("unhealed_notess")
                 except:
                     pass
                     
@@ -203,8 +194,7 @@ class Userbot(Client):
                 try:
                     await self.five.send_message(config.LOGGER_ID, "✅ Assistant 5 Started")
                 except Exception as e:
-                    LOGGER(__name__).error(f"Assistant 5 failed to access logger group: {e}")
-                    exit()
+                    LOGGER(__name__).warning(f"Assistant 5 failed to access logger group: {e}")
                     
                 self.five.id = self.five.me.id
                 self.five.name = self.five.me.mention

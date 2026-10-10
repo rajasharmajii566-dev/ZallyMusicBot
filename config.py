@@ -13,8 +13,12 @@ API_HASH = getenv("API_HASH")
 # Get your token from @BotFather on Telegram.
 BOT_TOKEN = getenv("BOT_TOKEN")
 
+# Optional - key used by some forks for encrypting sensitive data.
+ENCRYPTION_KEY = getenv("ENCRYPTION_KEY", "")
+
 # Get your mongo url from cloud.mongodb.com
-MONGO_DB_URI = getenv("MONGO_DB_URI")
+# Accepts either MONGO_DB_URI (canonical) or MONGO_URI (common alias).
+MONGO_DB_URI = getenv("MONGO_DB_URI") or getenv("MONGO_URI")
 
 # Vars For API End Pont.
 YTPROXY_URL = getenv("YTPROXY_URL", 'https://tgapi.xbitcode.com') ## xBit Music Endpoint.
@@ -23,16 +27,19 @@ YT_API_KEY = getenv("YT_API_KEY", '')  ## Get your API key from https://t.me/tgm
 DURATION_LIMIT_MIN = int(getenv("DURATION_LIMIT", 600))
 
 # Chat id of a group for logging bot's activities
-LOGGER_ID = int(getenv("LOGGER_ID"))
+# Accepts either LOGGER_ID (canonical) or LOG_GROUP_ID (common alias).
+_logger_id = getenv("LOGGER_ID") or getenv("LOG_GROUP_ID")
+LOGGER_ID = int(_logger_id) if _logger_id else None
 
 # Get this value from @FallenxBot on Telegram by /id
-OWNER_ID = int(getenv("OWNER_ID", ""))
+_owner_id = getenv("OWNER_ID")
+OWNER_ID = int(_owner_id) if _owner_id else None
 
 ## Fill these variables if you're deploying on heroku.
 # Your heroku app name
-HEROKU_APP_NAME = getenv("")
+HEROKU_APP_NAME = getenv("HEROKU_APP_NAME")
 # Get it from http://dashboard.heroku.com/account
-HEROKU_API_KEY = getenv("")
+HEROKU_API_KEY = getenv("HEROKU_API_KEY")
 
 UPSTREAM_REPO = getenv(
     "UPSTREAM_REPO",

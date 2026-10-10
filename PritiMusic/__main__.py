@@ -42,11 +42,11 @@ async def init():
     try:
         await Lucky.stream_call("https://te.legra.ph/file/29f784eb49d230ab62e9e.mp4")
     except NoActiveGroupCall:
-        LOGGER("PritiMusic").error(
-            "Please turn on the videochat of your log group\channel.\n\nStopping Bot..."
+        LOGGER("PritiMusic").warning(
+            "Log group video chat is not active. The bot will still run, but for "
+            "streaming please start the video chat in your log group/channel."
         )
-        exit()
-    except:
+    except Exception:
         pass
     await Lucky.decorators()
     LOGGER("PritiMusic").info(
