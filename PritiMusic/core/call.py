@@ -113,7 +113,10 @@ class Call(PyTgCalls):
             await client.play(
                 chat_id=chat_id,
                 stream=stream,
-                config=types.GroupCallConfig(auto_start=False),
+                # auto_start=True lets the assistant create the group video
+                # chat automatically if it isn't already running, so /play and
+                # /vplay just work without a manual "start video chat" step.
+                config=types.GroupCallConfig(auto_start=True),
             )
         except exceptions.NoActiveGroupCall:
             raise
