@@ -277,6 +277,11 @@ class Call(PyTgCalls):
         assistant = await group_assistant(self, chat_id)
         language = await get_lang(chat_id)
         _ = get_string(language)
+        if not link:
+            # Download failed (e.g. yt-dlp could not fetch the media). Raise a
+            # proper AssistantErr instead of passing None to PyTgCalls, which
+            # would surface as an ugly "TypeError" to the user.
+            raise AssistantErr(_["call_10"])
         stream = self._build_stream(link, video=bool(video))
         try:
             await self._play_on_assistant(assistant, chat_id, stream)

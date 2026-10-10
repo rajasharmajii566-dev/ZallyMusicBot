@@ -37,6 +37,19 @@ def cookie_txt_file():
         return None
 
 
+def cookie_args():
+    """Return yt-dlp cookie CLI args only when a valid cookie file exists.
+
+    ``cookie_txt_file()`` returns ``None`` when no cookies are configured, so
+    blindly passing ``--cookies None`` would crash yt-dlp. This helper keeps the
+    argument list safe for every caller.
+    """
+    ck = cookie_txt_file()
+    if ck and os.path.exists(ck):
+        return ["--cookies", ck]
+    return []
+
+
 async def check_file_size(link):
     async def get_format_info(link):
         proc = await asyncio.create_subprocess_exec(
@@ -798,15 +811,25 @@ class YouTubeAPI:
 
         if songvideo:
             fpath = await song_video_dl()
+            if not fpath:
+                fpath = await ytdlp_download(vid_id, video=True)
             return fpath
         elif songaudio:
             fpath = await song_audio_dl()
+            if not fpath:
+                fpath = await ytdlp_download(vid_id, video=False)
             return fpath
         elif video:
             direct = True
             downloaded_file = await video_dl(vid_id)
+            if not downloaded_file:
+                # No paid API backend configured -> fall back to yt-dlp so
+                # /vplay still works and streams a Telegram-compatible video.
+                downloaded_file = await ytdlp_download(vid_id, video=True)
         else:
             direct = True
             downloaded_file = await audio_dl(vid_id)
-        
+            if not downloaded_file:
+                downloaded_file = await ytdlp_download(vid_id, video=False)
+
         return downloaded_file, direct
