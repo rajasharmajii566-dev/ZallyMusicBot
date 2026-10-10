@@ -23,17 +23,38 @@ from config import YT_API_KEY, YTPROXY_URL as YTPROXY
 logger = LOGGER(__name__)
 
 def cookie_txt_file():
+    """Return a relative path to a yt-dlp cookie file, or ``None``.
+
+    Cookies are what actually lets YouTube downloads work from datacenter IPs
+    (Railway, AWS, GCP, ...). YouTube answers those IPs with
+    "Sign in to confirm you're not a bot" otherwise.
+
+    Provide them in either of these ways:
+      * drop a Netscape-format ``cookies.txt`` into the ``cookies/`` folder, or
+      * set the ``COOKIES`` (or ``YOUTUBE_COOKIES``) env var to the raw file
+        contents (handy on Railway/Heroku where you can't upload files).
+    """
     try:
-        folder_path = f"{os.getcwd()}/cookies"
-        filename = f"{os.getcwd()}/cookies/logs.csv"
-        txt_files = glob.glob(os.path.join(folder_path, '*.txt'))
+        folder_path = os.path.join(os.getcwd(), "cookies")
+        os.makedirs(folder_path, exist_ok=True)
+        # Materialise raw cookies from an env var into cookies/cookies.txt
+        raw = (os.getenv("COOKIES") or os.getenv("YOUTUBE_COOKIES") or "").strip()
+        if raw:
+            target = os.path.join(folder_path, "cookies.txt")
+            if not os.path.exists(target) or os.path.getsize(target) == 0:
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(raw.replace("\\n", "\n"))
+        txt_files = glob.glob(os.path.join(folder_path, "*.txt"))
         if not txt_files:
-            raise FileNotFoundError("No .txt files found in the specified folder.")
-        cookie_txt_file = random.choice(txt_files)
-        with open(filename, 'a') as file:
-            file.write(f'Choosen File : {cookie_txt_file}\n')
-        return f"""cookies/{str(cookie_txt_file).split("/")[-1]}"""
-    except:
+            return None
+        chosen = random.choice(txt_files)
+        try:
+            with open(os.path.join(folder_path, "logs.csv"), "a") as fh:
+                fh.write(f"Choosen File : {chosen}\n")
+        except Exception:
+            pass
+        return f"cookies/{os.path.basename(chosen)}"
+    except Exception:
         return None
 
 
@@ -151,6 +172,13 @@ async def ytdlp_download(vid_id: str, video: bool = False):
         _ck = cookie_txt_file()
         if _ck:
             ydl_opts["cookiefile"] = _ck
+            logger.info(f"yt-dlp using cookie file: {_ck}")
+        else:
+            logger.warning(
+                "No YouTube cookies found. Downloads from datacenter IPs "
+                "(Railway/AWS/GCP) will fail with 'Sign in to confirm you're "
+                "not a bot'. Add cookies/cookies.txt or set the COOKIES env var."
+            )
 
         if os.path.exists(target) and os.path.getsize(target) > 0:
             return target

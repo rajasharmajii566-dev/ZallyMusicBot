@@ -281,7 +281,15 @@ class Call(PyTgCalls):
             # Download failed (e.g. yt-dlp could not fetch the media). Raise a
             # proper AssistantErr instead of passing None to PyTgCalls, which
             # would surface as an ugly "TypeError" to the user.
-            raise AssistantErr(_["call_10"])
+            raise AssistantErr(
+                "❌ <b>Download failed.</b>\n\n"
+                "YouTube blocked this request from the server's IP "
+                "(<i>“Sign in to confirm you're not a bot”</i>).\n\n"
+                "<b>Fix:</b> add YouTube cookies — drop a Netscape-format "
+                "<code>cookies.txt</code> into the <code>cookies/</code> folder, "
+                "or set the <code>COOKIES</code> environment variable to its "
+                "contents (see README)."
+            )
         stream = self._build_stream(link, video=bool(video))
         try:
             await self._play_on_assistant(assistant, chat_id, stream)

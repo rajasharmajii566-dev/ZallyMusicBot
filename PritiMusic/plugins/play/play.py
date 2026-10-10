@@ -17,8 +17,16 @@ from PritiMusic.utils.decorators.play import PlayWrapper
 from PritiMusic.utils.formatters import formats
 from PritiMusic.utils.inline import botplaylist_markup, livestream_markup, playlist_markup, slider_markup, track_markup
 from PritiMusic.utils.logger import play_logs
+from PritiMusic.utils.exceptions import AssistantErr
 from PritiMusic.utils.stream.stream import stream
 from config import BANNED_USERS, lyrical
+
+
+def _format_error(_, e):
+    """Show the real (friendly) message for AssistantErr, else the generic one."""
+    if isinstance(e, AssistantErr):
+        return str(e)
+    return _["general_2"].format(type(e).__name__)
 
 BANNED_WORDS = ["porn", "pornhub", "xvideos", "xnxx", "brazzers", "onlyfans", "xhamster", "hot bhabhi", "deskbabe", "redtube", "spankbang", "child porn", "pedophile", "pedo", "jailbait", "loli", "shota", "csam", "incest", "bestiality", "zoophilia", "snuff", "revenge porn", "nonconsensual"]
 
@@ -113,7 +121,7 @@ async def play_commnd(client, message: Message, _, chat_id, video, channel, play
                 await send_security_log(message, "ɴsғᴡ ᴠɪᴏʟᴀᴛɪᴏɴ", details.get("title", ""))
                 return await mystic.edit_text("**🚫 sᴇᴄᴜʀɪᴛʏ ᴀʟᴇʀᴛ: ᴀᴅᴜʟᴛ ᴄᴏɴᴛᴇɴᴛ ᴘʀᴏʜɪʙɪᴛᴇᴅ!**")
             try: await stream(_, mystic, user_id, details, chat_id, user_name, message.chat.id, streamtype="telegram", forceplay=fplay)
-            except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+            except Exception as e: return await mystic.edit_text(_format_error(_, e))
             return await mystic.delete()
         return
     elif video_telegram:
@@ -132,7 +140,7 @@ async def play_commnd(client, message: Message, _, chat_id, video, channel, play
                 await send_security_log(message, "ɴsғᴡ ᴠɪᴏʟᴀᴛɪᴏɴ", details.get("title", ""))
                 return await mystic.edit_text("**🚫 sᴇᴄᴜʀɪᴛʏ ᴀʟᴇʀᴛ: ᴀᴅᴜʟᴛ ᴄᴏɴᴛᴇɴᴛ ᴘʀᴏʜɪʙɪᴛᴇᴅ!**")
             try: await stream(_, mystic, user_id, details, chat_id, user_name, message.chat.id, video=True, streamtype="telegram", forceplay=fplay)
-            except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+            except Exception as e: return await mystic.edit_text(_format_error(_, e))
             return await mystic.delete()
         return
     elif url:
@@ -207,17 +215,17 @@ async def play_commnd(client, message: Message, _, chat_id, video, channel, play
             except: return await mystic.edit_text(_["play_3"])
             if details["duration_sec"] > config.DURATION_LIMIT: return await mystic.edit_text(_["play_6"].format(config.DURATION_LIMIT_MIN, app.mention))
             try: await stream(_, mystic, user_id, details, chat_id, user_name, message.chat.id, streamtype="soundcloud", forceplay=fplay)
-            except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+            except Exception as e: return await mystic.edit_text(_format_error(_, e))
             return await mystic.delete()
         else:
             try: await Lucky.stream_call(url)
             except NoActiveGroupCall:
                 await mystic.edit_text(_["black_9"])
                 return await app.send_message(chat_id=config.LOGGER_ID, text=_["play_17"])
-            except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+            except Exception as e: return await mystic.edit_text(_format_error(_, e))
             await mystic.edit_text(_["str_2"])
             try: await stream(_, mystic, message.from_user.id, url, chat_id, message.from_user.first_name, message.chat.id, video=video, streamtype="index", forceplay=fplay)
-            except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+            except Exception as e: return await mystic.edit_text(_format_error(_, e))
             return await play_logs(message, streamtype="M3u8 or Index Link")
     else:
         if len(message.command) < 2: return await mystic.edit_text(_["play_18"], reply_markup=InlineKeyboardMarkup(botplaylist_markup(_)))
@@ -240,7 +248,7 @@ async def play_commnd(client, message: Message, _, chat_id, video, channel, play
                 if time_to_seconds(details["duration_min"]) > config.DURATION_LIMIT: return await mystic.edit_text(_["play_6"].format(config.DURATION_LIMIT_MIN, app.mention))
             else: return await mystic.edit_text(_["play_13"], reply_markup=InlineKeyboardMarkup(livestream_markup(_, track_id, user_id, "v" if video else "a", "c" if channel else "g", "f" if fplay else "d")))
         try: await stream(_, mystic, user_id, details, chat_id, user_name, message.chat.id, video=video, streamtype=streamtype, spotify=spotify, forceplay=fplay)
-        except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+        except Exception as e: return await mystic.edit_text(_format_error(_, e))
         await mystic.delete()
         return await play_logs(message, streamtype=streamtype)
     else:
@@ -276,7 +284,7 @@ async def play_music(client, CallbackQuery, _):
         if time_to_seconds(details["duration_min"]) > config.DURATION_LIMIT: return await mystic.edit_text(_["play_6"].format(config.DURATION_LIMIT_MIN, app.mention))
     else: return await mystic.edit_text(_["play_13"], reply_markup=InlineKeyboardMarkup(livestream_markup(_, track_id, CallbackQuery.from_user.id, mode, "c" if cplay == "c" else "g", "f" if fplay else "d")))
     try: await stream(_, mystic, CallbackQuery.from_user.id, details, chat_id, CallbackQuery.from_user.first_name, CallbackQuery.message.chat.id, True if mode == "v" else None, streamtype="youtube", forceplay=True if fplay == "f" else None)
-    except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+    except Exception as e: return await mystic.edit_text(_format_error(_, e))
     return await mystic.delete()
 
 @app.on_callback_query(filters.regex("LuckymousAdmin") & ~BANNED_USERS)
@@ -315,7 +323,7 @@ async def play_playlists_command(client, CallbackQuery, _):
         try: result, apple_id = await Apple.playlist(videoid, True)
         except: return await mystic.edit_text(_["play_3"])
     try: await stream(_, mystic, user_id, result, chat_id, CallbackQuery.from_user.first_name, CallbackQuery.message.chat.id, True if mode == "v" else None, streamtype="playlist", spotify=True if ptype != "yt" else False, forceplay=True if fplay == "f" else None)
-    except Exception as e: return await mystic.edit_text(_["general_2"].format(type(e).__name__))
+    except Exception as e: return await mystic.edit_text(_format_error(_, e))
     return await mystic.delete()
 
 @app.on_callback_query(filters.regex("slider") & ~BANNED_USERS)

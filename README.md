@@ -35,6 +35,7 @@ with both **audio** and **video** voice-chat streaming.
 | `ENCRYPTION_KEY` | ⬜ | optional |
 | `YT_API_KEY` | ⬜ | optional paid backend; **not needed** thanks to the yt-dlp fallback |
 | `YTPROXY_URL` | ⬜ | optional paid backend endpoint |
+| `COOKIES` | ⬜* | **recommended on Railway** — raw `cookies.txt` contents (see below) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | ⬜ | only for Spotify links |
 | `HEROKU_API_KEY` / `HEROKU_APP_NAME` | ⬜ | only for Heroku |
 
@@ -70,6 +71,30 @@ STRING_SESSION=BQ....
   If it is off, the bot still runs — you just won't get the warm-up stream.
 - `API_ID`, `LOGGER_ID`, `OWNER_ID` must be numbers, no quotes.
 - `LOGGER_ID` must start with `-100` for supergroups/channels.
+
+---
+
+## YouTube cookies (recommended on Railway)
+
+YouTube blocks download requests coming from **datacenter IPs** (Railway, AWS,
+GCP) with **“Sign in to confirm you're not a bot”**. A PO Token alone does *not*
+fix this — YouTube requires **cookies** from a logged-in account.
+
+Give the bot cookies in either way:
+
+1. **File** — save a Netscape-format `cookies.txt` into the `cookies/` folder.
+2. **Env var** — set `COOKIES` to the raw file contents (best on Railway, where
+   you can't upload files). `YOUTUBE_COOKIES` works too.
+
+How to export `cookies.txt`:
+
+- Install the **“Get cookies.txt LOCALLY”** browser extension (Chrome/Firefox).
+- Log in to <https://www.youtube.com> in that browser.
+- Open the extension → **Export** → save `cookies.txt`.
+- Paste its contents into the `COOKIES` variable, or drop the file in `cookies/`.
+
+> Without cookies, `/play` and `/vplay` reply with a clear
+> “Download failed … add cookies” message instead of crashing with `TypeError`.
 
 ---
 
