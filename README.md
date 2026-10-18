@@ -135,11 +135,11 @@ YouTube audio**:
    extracting a known-blocked video **and measuring its real googlevideo
    throughput**. The working proxies are cached (`downloads/.proxy_pool.json`,
    2 h TTL), sorted **fastest-first** and raced 4 at a time, so the exact
-   requested YouTube track is downloaded through a clean exit IP. With `aria2c`
-   installed the download is split across 16 connections (~1.8× faster on free
-   proxies). The YouTube path gets a **30 s head start** (`FALLBACK_HEAD_START`)
-   before the fallback below may win — so YouTube is used whenever it can
-   actually deliver.
+   requested YouTube track is downloaded through a clean exit IP. (Multi-connection
+   `aria2c` downloads are supported via `ARIA2_CONNECTIONS` but are **off by
+   default** — free proxies are too flaky for them.) The YouTube path gets a
+   **30 s head start** (`FALLBACK_HEAD_START`) before the fallback below may win —
+   so YouTube is used whenever it can actually deliver.
 2. **SoundCloud (safety net)** — YouTube's public **oEmbed** endpoint still
    answers while the player API is blocked, so the real song title is read from
    there, cleaned (`Kesariya - Brahmastra | Ranbir Kapoor, Alia Bhatt | …` →

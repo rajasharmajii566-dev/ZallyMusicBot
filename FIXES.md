@@ -212,7 +212,7 @@ from the other source" and never from YouTube.
 
 | Change | Effect |
 | --- | --- |
-| **aria2c multi-connection** | When `aria2c` is present (now installed in the Dockerfile) the proxy download is split across 16 connections. Measured **779 KB/s vs 433 KB/s** single-connection (~1.8x). |
+| **aria2c multi-connection** | When `aria2c` is present *and* `ARIA2_CONNECTIONS>0` the proxy download is split across several connections. Measured **779 KB/s vs 433 KB/s** single-connection (~1.8x) on a good proxy — but through flaky free proxies it often times out, so it is **off by default** and the code retries single-connection if it fails. |
 | Parallel race (`PROXY_RACE=4`) | The four fastest proxies download the same song at once; the first to finish wins. |
 | Fail-fast timeouts | `PROXY_DL_TIMEOUT=45`, `PROXY_DEEP_TIMEOUT=18` so a dead proxy never stalls the queue. |
 | Block memory | Once YouTube rejects this IP the ~10 s player-client walk is skipped entirely. |

@@ -75,9 +75,11 @@ PROXY_DEEP_WORKERS = _int_env("PROXY_DEEP_WORKERS", 24)
 PROXY_DEEP_TIMEOUT = _int_env("PROXY_DEEP_TIMEOUT", 18)
 # Per-download socket timeout for a proxy attempt (fail fast, try the next one).
 PROXY_DL_TIMEOUT = _int_env("PROXY_DL_TIMEOUT", 45)
-# aria2c multi-connection download (used when aria2c is installed). More
-# connections => more of a slow proxy's bandwidth => faster YouTube downloads.
-ARIA2_CONNECTIONS = _int_env("ARIA2_CONNECTIONS", 16)
+# aria2c multi-connection download. It measured ~1.8x faster on a single good
+# proxy, but through flaky free proxies it frequently times out and the retry
+# wastes more time than it saves, so it is OFF by default. Set to e.g. 8 to
+# enable (only helps when your proxies are stable).
+ARIA2_CONNECTIONS = _int_env("ARIA2_CONNECTIONS", 0)
 # Give the YouTube (proxy) path a head start over SoundCloud so the exact
 # requested track is preferred whenever a pooled proxy can deliver it.  With a
 # speed-ranked pool the YouTube path typically finishes in 10-25 s, so 30 s
@@ -154,13 +156,16 @@ def js_runtimes():
 
 
 def aria2c_path():
-    """Return the aria2c binary if present.
+    """Return the aria2c binary if present and enabled.
 
     Free proxies usually cap a single TCP connection at a few hundred KB/s.
-    Splitting the file across 16 connections (aria2c ``-x16``) measured ~1.8x
-    faster than a single connection, which is what makes the YouTube-proxy
-    path fast enough to be the *preferred* source instead of a slow last resort.
+    Splitting the file across several connections (aria2c ``-x``) measured ~1.8x
+    faster than a single connection *in isolation*, but running it for every
+    racing proxy at once can saturate the network and time out, so it is kept
+    modest and can be disabled with ``ARIA2_CONNECTIONS=0``.
     """
+    if ARIA2_CONNECTIONS < 2:
+        return None
     return shutil.which("aria2c")
 
 
@@ -170,10 +175,13 @@ def _aria2c_args() -> list[str]:
         "-s", str(ARIA2_CONNECTIONS),
         "-k", "1M",
         "--min-split-size=1M",
-        "--max-tries=1",
+        "--max-tries=3",
         "--retry-wait=0",
         "--summary-interval=0",
-        "--console-log-level=warn",
+        # keep the log clean: cancelled race losers make aria2c print "Download
+        # aborted" at error level, which is just noise
+        "--console-log-level=fatal",
+        "--show-console-readout=false",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
     ]
@@ -817,7 +825,12 @@ def _proxy_tag(proxy: str) -> str:
 
 def _ytdlp_with_proxy(vid_id: str, video: bool, proxy: str,
                       out_base: str | None = None) -> str | None:
-    """Download ``vid_id`` through ``proxy``. Returns the produced file path."""
+    """Download ``vid_id`` through ``proxy``. Returns the produced file path.
+
+    Tries a multi-connection (aria2c) download first for speed; if aria2c is not
+    available or it fails, retries the same proxy with a plain single connection
+    so a flaky multi-connection never costs us a working proxy.
+    """
     url = f"https://www.youtube.com/watch?v={vid_id}"
     base = out_base or os.path.join(DOWNLOAD_DIR, vid_id)
     if video:
@@ -836,44 +849,59 @@ def _ytdlp_with_proxy(vid_id: str, video: bool, proxy: str,
             "bestaudio/best"
         )
 
-    extra = {
-        "outtmpl": base + ".%(ext)s",
-        "format": fmt,
-        "socket_timeout": PROXY_DL_TIMEOUT,
-        "retries": 1,
-        "fragment_retries": 2,
-        "extractor_retries": 0,
-        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
-    }
-    # Multi-connection download through the proxy (big speed win on free proxies).
-    if aria2c_path():
-        extra["external_downloader"] = {"default": "aria2c"}
-        extra["external_downloader_args"] = {"aria2c": _aria2c_args()}
-        extra["concurrent_fragment_downloads"] = max(4, ARIA2_CONNECTIONS // 2)
-    opts = base_opts(proxy=proxy, extra=extra)
-    if video:
-        opts["merge_output_format"] = "mp4"
-    else:
-        opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
-             "preferredquality": "192"}
-        ]
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as exc:  # noqa: BLE001
-        logger.info(f"proxy {proxy} failed for {vid_id}: {str(exc)[:110]}")
-        _cleanup(base)
+    def _attempt(use_aria: bool):
+        extra = {
+            "outtmpl": base + ".%(ext)s",
+            "format": fmt,
+            "socket_timeout": PROXY_DL_TIMEOUT,
+            "retries": 1,
+            "fragment_retries": 2,
+            "extractor_retries": 0,
+            "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
+        }
+        # Multi-connection download through the proxy (big speed win on free proxies).
+        if use_aria:
+            extra["external_downloader"] = {"default": "aria2c"}
+            extra["external_downloader_args"] = {"aria2c": _aria2c_args()}
+            extra["concurrent_fragment_downloads"] = max(4, ARIA2_CONNECTIONS // 2)
+        opts = base_opts(proxy=proxy, extra=extra)
+        if video:
+            opts["merge_output_format"] = "mp4"
+        else:
+            opts["postprocessors"] = [
+                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
+                 "preferredquality": "192"}
+            ]
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                f"proxy {proxy} failed for {vid_id} "
+                f"(aria2c={use_aria}): {str(exc)[:110]}"
+            )
+            return None
+
+        if os.path.exists(target) and os.path.getsize(target) > 0:
+            return target
+        import glob as _glob
+
+        for f in _glob.glob(base + ".*"):
+            if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")) and os.path.getsize(f) > 0:
+                return f
         return None
 
-    if os.path.exists(target) and os.path.getsize(target) > 0:
-        return target
-    import glob as _glob
-
-    for f in _glob.glob(base + ".*"):
-        if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")) and os.path.getsize(f) > 0:
-            return f
+    use_aria = aria2c_path() is not None
+    result = _attempt(use_aria)
+    if result:
+        return result
     _cleanup(base)
+    if use_aria:
+        # aria2c failed -> fall back to a single connection through the same proxy
+        result = _attempt(False)
+        if result:
+            return result
+        _cleanup(base)
     return None
 
 
