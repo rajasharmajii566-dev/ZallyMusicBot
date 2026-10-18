@@ -173,3 +173,66 @@ proxy pool in the background at startup.
 > Cookies / `YT_PROXY` are still tried **first** when configured — they give the
 > exact YouTube audio and the best quality. The new layers are the safety net
 > for when neither is available.
+
+---
+
+## Round 5 — "YouTube se bhi chale + fast + naye links"
+
+**Reported (Hinglish):** songs were only playing from the fallback source, the
+user wanted them to play **from YouTube**, the support/updates links had to
+change to `https://t.me/rajamods7_ontop`, and finding a song was **too slow**.
+
+### 1. The real reason YouTube never won (critical bug)
+
+Round 4 raced the proxy path against SoundCloud, but the proxy path was
+**silently dead**. `_try_proxies` did:
+
+```python
+asyncio.create_task(loop.run_in_executor(...))   # WRONG
+```
+
+`loop.run_in_executor()` already returns a `Future`; wrapping it in
+`asyncio.create_task()` raises `TypeError: a coroutine was expected`. The
+exception was swallowed by the `except Exception` around the task, so **every**
+download quietly fell through to SoundCloud — which is why the bot "only played
+from the other source" and never from YouTube.
+
+**Fix:** use the executor `Future` directly (`asyncio.wait()` accepts futures).
+
+### 2. YouTube is now the *preferred* source
+
+| Change | Effect |
+| --- | --- |
+| `FALLBACK_HEAD_START=30` | The YouTube (proxy) path gets a 30 s head start; SoundCloud may only win after that. So the exact requested YouTube track is used whenever a pooled proxy can deliver it. |
+| Speed-ranked pool | Each proxy is now measured for **real googlevideo throughput** during the scan (`_probe_speed`), cached, and the pool is sorted fastest-first. A 300 KB/s proxy downloads a 5 MB song in ~15 s vs ~90 s for a 60 KB/s one. |
+| Winner speed feedback | When a proxy wins a race its measured KB/s is stored, so the pool keeps improving over time. |
+| Smaller audio track | The proxy path prefers the ~128 kbps **m4a** track (≈4-5 MB) instead of the largest stream, cutting the bytes a slow proxy has to move. |
+
+### 3. Speed
+
+| Change | Effect |
+| --- | --- |
+| **aria2c multi-connection** | When `aria2c` is present (now installed in the Dockerfile) the proxy download is split across 16 connections. Measured **779 KB/s vs 433 KB/s** single-connection (~1.8x). |
+| Parallel race (`PROXY_RACE=4`) | The four fastest proxies download the same song at once; the first to finish wins. |
+| Fail-fast timeouts | `PROXY_DL_TIMEOUT=45`, `PROXY_DEEP_TIMEOUT=18` so a dead proxy never stalls the queue. |
+| Block memory | Once YouTube rejects this IP the ~10 s player-client walk is skipped entirely. |
+| Download cache | A song already in `downloads/` is returned instantly. |
+
+### 4. Support / Updates links
+
+`config.py` (`SUPPORT_CHANNEL`, `SUPPORT_CHAT`), the five `join_chat` calls in
+`PritiMusic/core/userbot.py`, `.env` and `.env.example` all now point at
+**https://t.me/rajamods7_ontop**.
+
+### Verified live (blocked IP, no cookies)
+
+| Test | Result |
+| --- | --- |
+| `ytdlp_download("kJQP7kiw5Fk")` — Despacito | ✅ **YouTube** audio, 6.76 MB, via proxy `5.129.254.154:8888` @ **471 KB/s**, **14.0 s** |
+| `ytdlp_download("BddP6PYo2gs")` — Kesariya | ✅ **YouTube** audio, via proxy `190.12.150.244:999`, **15.6 s** |
+| `ytdlp_download("kJQP7kiw5Fk")` (cold pool) | ✅ YouTube audio, 43.7 s (slow proxy) — SoundCloud never used |
+| Speed-ranked pool scan | ✅ 10 working proxies ranked, best **303 KB/s** |
+| aria2c multi-connection | ✅ 779 KB/s vs 433 KB/s single-connection |
+
+**New env vars:** `PROXY_RACE`, `ARIA2_CONNECTIONS`, `PROXY_DEEP_WORKERS`,
+`PROXY_DEEP_TIMEOUT`, `PROXY_DL_TIMEOUT`, `BLOCK_MEMORY` (plus the Round 4 ones).

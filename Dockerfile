@@ -4,8 +4,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # git is required to pip-install Kurigram from a git URL.
+# aria2c lets the YouTube-proxy fallback download over many connections, which
+# is what makes it fast enough to be the preferred source on blocked IPs.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl xz-utils ca-certificates && \
+    apt-get install -y --no-install-recommends git curl xz-utils ca-certificates aria2 && \
     rm -rf /var/lib/apt/lists/*
 
 # Static ffmpeg + ffprobe (used for audio/video processing and streaming).

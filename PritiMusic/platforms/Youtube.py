@@ -20,7 +20,13 @@ from PritiMusic import LOGGER
 from PritiMusic.utils.database import is_on_off
 from PritiMusic.utils.formatters import time_to_seconds
 from config import YT_API_KEY, YTPROXY_URL as YTPROXY
-from PritiMusic.platforms.ytfallback import fallback_download, PROXY_POOL
+from PritiMusic.platforms.ytfallback import (
+    fallback_download,
+    PROXY_POOL,
+    ip_recently_blocked,
+    mark_ip_blocked,
+    clear_ip_blocked,
+)
 
 logger = LOGGER(__name__)
 
@@ -278,7 +284,19 @@ async def ytdlp_download(vid_id: str, video: bool = False):
     last_error = None
     bot_blocked = False
 
-    for client in _YTDLP_CLIENT_ATTEMPTS:
+    # Speed: when this IP was rejected moments ago and the user has no cookies /
+    # proxy configured, walking all five player clients just wastes ~10 s. Skip
+    # straight to the fallback chain; the direct path is retried after
+    # BLOCK_MEMORY seconds (or immediately once cookies/proxy appear).
+    attempts = _YTDLP_CLIENT_ATTEMPTS
+    if ip_recently_blocked() and not cookie_txt_file() and not _ytdlp_proxy():
+        attempts = ()
+        logger.info(
+            f"YouTube IP is known to be blocked - going straight to the "
+            f"fallback chain for {vid_id}"
+        )
+
+    for client in attempts:
         opts = _ytdlp_common_opts()
         opts["outtmpl"] = outtmpl
         opts["format"] = fmt
@@ -305,6 +323,8 @@ async def ytdlp_download(vid_id: str, video: bool = False):
             last_error = e
             if _looks_like_bot_block(str(e)):
                 bot_blocked = True
+                # Remember it so the next /play skips the client walk entirely.
+                mark_ip_blocked()
             logger.warning(
                 f"yt-dlp attempt failed for {vid_id} "
                 f"(client={client or 'default'}): {type(e).__name__}: {e}"
@@ -312,11 +332,13 @@ async def ytdlp_download(vid_id: str, video: bool = False):
             continue
 
         if os.path.exists(target) and os.path.getsize(target) > 0:
+            clear_ip_blocked()
             return target
         # Pick up whatever file yt-dlp produced.
         for f in glob.glob(os.path.join("downloads", f"{vid_id}.*")):
             if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")):
                 if os.path.getsize(f) > 0:
+                    clear_ip_blocked()
                     return f
 
     # ------------------------------------------------------------------
@@ -333,6 +355,7 @@ async def ytdlp_download(vid_id: str, video: bool = False):
         logger.warning(f"fallback_download failed for {vid_id}: {type(e).__name__}: {e}")
 
     if bot_blocked:
+        mark_ip_blocked()
         logger.error(
             f"YouTube is blocking this server's IP for {vid_id} "
             "('Sign in to confirm you're not a bot') and every fallback "

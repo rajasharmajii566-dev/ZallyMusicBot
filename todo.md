@@ -1,43 +1,39 @@
-# ZallyMusicBot — Round 4: Make songs ACTUALLY play (no cookies needed)
+# ZallyMusicBot — Round 5: YouTube as source + faster + new links
 
-## Phase A: Re-diagnose current state ✅
-- [x] Confirm current sandbox IP still blocked by YouTube (52.12.117.99: dQw4w9WgXcQ OK, jNQXAC9IVRw / kJQP7kiw5Fk / BddP6PYo2gs = LOGIN_REQUIRED)
-- [x] Check partial block: yes — a few videos work, most do not
-- [x] Confirm error originates from a datacenter IP, not a code bug
+User asks (Hinglish):
+(a) "youtube se bhi song chale" — songs must actually come from YouTube
+(b) support + updates links -> https://t.me/rajamods7_ontop
+(c) "fast chalne chaiye song bhaut late find karta hai" — make it fast
 
-## Phase B: Find a working alternative source ✅
-- [x] Test Invidious instances — all 403/502/404 (they are on datacenter IPs too)
-- [x] Test Piped instances — all 403/500/502
-- [x] Test JioSaavn public APIs — all dead (DNS/404/402)
-- [x] Test iTunes Search API — works (artwork only)
-- [x] Test YouTube oEmbed — WORKS (title + thumbnail even while player API is blocked)
-- [x] Test SoundCloud via yt-dlp — WORKS (search + download, some DRM tracks)
-- [x] Test free public proxies — 10/120 reach YouTube, ~80% of those extract blocked videos
-- [x] Pick: proxy pool (exact YouTube audio) + SoundCloud (fast, title matched)
+## Phase A: Diagnose ✅
+- [x] Confirm search is fast (0.5–1.1 s via py_yt) — NOT the bottleneck
+- [x] Confirm YouTube-proxy download is slow (75–90 s via free proxies)
+- [x] Confirm SoundCloud download is fast (6.5–9 s)
+- [x] **Found the real bug**: `_try_proxies` wrapped `loop.run_in_executor(...)` (a Future) in `asyncio.create_task()` -> TypeError -> the whole YouTube-proxy path silently died, so SoundCloud always won
 
-## Phase C: Implement multi-source fallback ✅
-- [x] New `PritiMusic/platforms/ytfallback.py`
-- [x] ProxyPool: 6 list sources, latency sort, reachability test (50 threads), deep test on a blocked video, cache + rotate
-- [x] SoundCloud fallback: oEmbed title -> clean_query -> scsearch -> relevance guard
-- [x] Unicode folding so `Brahmāstra` == `Brahmastra`
-- [x] Variant penalty (remix/cover/slowed/8d/karaoke/...) so the original wins
-- [x] Still-image video (thumbnail + audio -> h264/aac mp4) for /vplay
-- [x] Parallel race: first usable file wins (FALLBACK_HEAD_START, default 0)
-- [x] Wire into `ytdlp_download()` so /play, /vplay, /song never die
-- [x] Warm the pool at startup in `__main__.py`
-- [x] Cookies / YT_PROXY still tried first when configured
+## Phase B: Fix the YouTube-proxy path ✅
+- [x] Use the executor Future directly (asyncio.wait accepts futures)
+- [x] Verified: proxy path now downloads the exact YouTube audio (kJQP7kiw5Fk, 6.76 MB)
 
-## Phase D: Verify end-to-end ✅
-- [x] `ytdlp_download("BddP6PYo2gs")` blocked -> mp3 6.78 MB, 192 kbps, 16 s
-- [x] `ytdlp_download("9bZkp7q19f0", video=True)` blocked -> mp4 5.97 MB, h264+aac, 27 s
-- [x] `ytdlp_download("kJQP7kiw5Fk")` blocked -> mp3 6.76 MB via proxy 41.216.186.161:8080
-- [x] Proxy pool scan -> 11 working proxies in 196 s
-- [x] SoundCloud match -> `Kesariya - Brahmastra` (sim 1.00) beats remix/cover
-- [x] LIVE Telegram request -> `F2m4HPLvj-4` (/vplay, "Jaiye Sajana") -> mp4 4.76 MB, h264+aac, 181 s, 24 s total
-- [x] Bot boots fully and stays running (PID 3239)
+## Phase C: Make YouTube the preferred source
+- [ ] Add a source preference so YouTube (proxy) wins when it works
+- [ ] Give the proxy path a configurable head start over SoundCloud
+- [ ] Keep SoundCloud strictly as a fallback (never silently preferred)
 
-## Phase E: Deliver ✅
-- [x] Commit `b570177` + push to GitHub main
-- [x] Update FIXES.md (Round 4), README.md, .env.example, .gitignore
-- [x] Bot restarted and ON
-- [x] Summary to user
+## Phase D: Speed tuning
+- [ ] Test aria2c multi-connection through a proxy (does it beat single-conn?)
+- [ ] Add a bandwidth test to the pool so fast proxies are preferred
+- [ ] Bound the worst case so a song never waits minutes
+
+## Phase E: Links ✅
+- [x] config.py SUPPORT_CHANNEL / SUPPORT_CHAT -> https://t.me/rajamods7_ontop
+- [x] userbot.py join_chat x5 -> rajamods7_ontop
+- [x] .env + .env.example updated
+
+## Phase F: Verify + ship
+- [ ] End-to-end test (YouTube wins, correct track, reasonable time)
+- [ ] Delete temp test scripts
+- [ ] Update FIXES.md / README.md / .env.example
+- [ ] Commit + push to GitHub
+- [ ] Restart bot ON
+- [ ] Report to user (they will deploy to Railway)

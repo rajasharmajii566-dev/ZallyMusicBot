@@ -127,26 +127,37 @@ with “No supported JavaScript runtime could be found”.
 clients (`default → android → ios → web_safari → tv_embedded`).
 
 If every client is rejected with “Sign in to confirm you're not a bot”, the bot
-**recovers automatically — no cookies required**:
+**recovers automatically — no cookies required**, and it prefers the **exact
+YouTube audio**:
 
-1. **Free-proxy pool** — the bot scrapes public proxy lists, latency-tests them
-   against YouTube and deep-tests every survivor by extracting a known-blocked
-   video. The working ones are cached (`downloads/.proxy_pool.json`, 40 min TTL)
-   and rotated. A proxy with a clean exit IP downloads the exact YouTube audio.
-2. **SoundCloud** — YouTube's public **oEmbed** endpoint still answers while the
-   player API is blocked, so the real song title is read from there, cleaned
-   (`Kesariya - Brahmastra | Ranbir Kapoor, Alia Bhatt | …` → `Kesariya - Brahmastra`)
-   and searched on SoundCloud. A keyword-overlap guard plus a `remix / cover /
-   slowed / 8d` penalty makes sure the **original** track wins.
-3. **Still-image video** — for `/vplay`, the SoundCloud audio is muxed with the
-   YouTube thumbnail into an H.264/AAC MP4 that Telegram voice chats can decode.
+1. **Free-proxy pool (preferred)** — the bot scrapes public proxy lists,
+   latency-tests them against YouTube, then deep-tests every survivor by
+   extracting a known-blocked video **and measuring its real googlevideo
+   throughput**. The working proxies are cached (`downloads/.proxy_pool.json`,
+   2 h TTL), sorted **fastest-first** and raced 4 at a time, so the exact
+   requested YouTube track is downloaded through a clean exit IP. With `aria2c`
+   installed the download is split across 16 connections (~1.8× faster on free
+   proxies). The YouTube path gets a **30 s head start** (`FALLBACK_HEAD_START`)
+   before the fallback below may win — so YouTube is used whenever it can
+   actually deliver.
+2. **SoundCloud (safety net)** — YouTube's public **oEmbed** endpoint still
+   answers while the player API is blocked, so the real song title is read from
+   there, cleaned (`Kesariya - Brahmastra | Ranbir Kapoor, Alia Bhatt | …` →
+   `Kesariya - Brahmastra`) and searched on SoundCloud. A keyword-overlap guard
+   plus a `remix / cover / slowed / 8d` penalty makes sure the **original** track
+   wins.
+3. **Still-image video** — for `/vplay`, if the proxy path cannot produce the
+   real video, the SoundCloud audio is muxed with the YouTube thumbnail into an
+   H.264/AAC MP4 that Telegram voice chats can decode.
 
-Both paths run **in parallel** and the first usable file wins (SoundCloud ≈ 8-16 s,
-proxy ≈ 30-200 s). Cookies and `YT_PROXY` are still tried first when configured,
-because they give the exact YouTube stream at full quality.
+The proxy and SoundCloud paths run **in parallel**; the first usable file wins
+once the head start has elapsed. Cookies and `YT_PROXY` are still tried first
+when configured, because they give the exact YouTube stream at full quality.
 
-Measured from a blocked datacenter IP with **no cookies at all**: Kesariya → 16 s,
-Gangnam Style (`/vplay`) → 27 s. See `FIXES.md` → *Round 4* for the full log.
+Measured from a blocked datacenter IP with **no cookies at all**: Despacito →
+**YouTube audio in 14 s** (proxy @ 471 KB/s), Kesariya → **YouTube audio in
+15.6 s**, Gangnam Style (`/vplay`) → **real YouTube MP4 in 45 s**. See `FIXES.md`
+→ *Round 5* for the full log.
 
 ---
 

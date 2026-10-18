@@ -60,7 +60,7 @@ class Userbot(Client):
                 
                 # Try to join support chats
                 try:
-                    await self.one.join_chat("unhealed_notess")
+                    await self.one.join_chat("rajamods7_ontop")
                     LOGGER(__name__).info("Assistant 1 joined support chats")
                 except Exception as e:
                     LOGGER(__name__).warning(f"Assistant 1 failed to join support chats: {e}")
@@ -109,7 +109,7 @@ class Userbot(Client):
                 await self.two.start()
                 
                 try:
-                    await self.two.join_chat("unhealed_notess")
+                    await self.two.join_chat("rajamods7_ontop")
                 except:
                     pass
                     
@@ -135,7 +135,7 @@ class Userbot(Client):
                 await self.three.start()
                 
                 try:
-                    await self.three.join_chat("unhealed_notess")
+                    await self.three.join_chat("rajamods7_ontop")
                 except:
                     pass
                     
@@ -160,7 +160,7 @@ class Userbot(Client):
                 await self.four.start()
                 
                 try:
-                    await self.four.join_chat("unhealed_notess")
+                    await self.four.join_chat("rajamods7_ontop")
                 except:
                     pass
                     
@@ -185,7 +185,7 @@ class Userbot(Client):
                 await self.five.start()
                 
                 try:
-                    await self.five.join_chat("unhealed_notess")
+                    await self.five.join_chat("rajamods7_ontop")
                 except:
                     pass
                     

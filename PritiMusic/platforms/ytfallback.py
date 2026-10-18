@@ -32,7 +32,7 @@ import threading
 import time
 import unicodedata
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yt_dlp
 
@@ -63,10 +63,28 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-PROXY_SCAN_LIMIT = _int_env("PROXY_SCAN_LIMIT", 260)
-PROXY_POOL_TARGET = _int_env("PROXY_POOL_TARGET", 10)
-PROXY_MAX_TRIES = _int_env("PROXY_MAX_TRIES", 5)
-PROXY_CACHE_TTL = _int_env("PROXY_CACHE_TTL", 2400)
+PROXY_SCAN_LIMIT = _int_env("PROXY_SCAN_LIMIT", 400)
+PROXY_POOL_TARGET = _int_env("PROXY_POOL_TARGET", 12)
+PROXY_MAX_TRIES = _int_env("PROXY_MAX_TRIES", 8)
+# How many proxies download the same song at once. The first one to finish wins,
+# which turns a slow sequential walk into a single fast download.
+PROXY_RACE = _int_env("PROXY_RACE", 4)
+PROXY_CACHE_TTL = _int_env("PROXY_CACHE_TTL", 7200)
+# Deep-test concurrency / timeout while scanning the pool.
+PROXY_DEEP_WORKERS = _int_env("PROXY_DEEP_WORKERS", 24)
+PROXY_DEEP_TIMEOUT = _int_env("PROXY_DEEP_TIMEOUT", 18)
+# Per-download socket timeout for a proxy attempt (fail fast, try the next one).
+PROXY_DL_TIMEOUT = _int_env("PROXY_DL_TIMEOUT", 45)
+# aria2c multi-connection download (used when aria2c is installed). More
+# connections => more of a slow proxy's bandwidth => faster YouTube downloads.
+ARIA2_CONNECTIONS = _int_env("ARIA2_CONNECTIONS", 16)
+# Give the YouTube (proxy) path a head start over SoundCloud so the exact
+# requested track is preferred whenever a pooled proxy can deliver it.  With a
+# speed-ranked pool the YouTube path typically finishes in 10-25 s, so 30 s
+# means "use YouTube whenever it can actually deliver, otherwise fall back".
+FALLBACK_HEAD_START = _int_env("FALLBACK_HEAD_START", 30)
+# How long to remember that this server's IP is blocked by YouTube.
+BLOCK_MEMORY = _int_env("BLOCK_MEMORY", 900)
 SOUNDCLOUD_ENABLED = (os.environ.get("SOUNDCLOUD_FALLBACK", "1") or "1").lower() not in (
     "0",
     "false",
@@ -84,6 +102,34 @@ _PROXY_LIST_URLS = (
 )
 
 _PROXY_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}$")
+
+# --------------------------------------------------------------------------
+# "this IP is blocked" memory
+#
+# Every /play used to burn ~10 s walking the five YouTube player clients only to
+# be rejected by all of them. Once we know the IP is blocked we skip straight to
+# the fallback chain, and we retry the direct path again after BLOCK_MEMORY.
+# --------------------------------------------------------------------------
+
+_blocked_until = 0.0
+_blocked_lock = threading.Lock()
+
+
+def mark_ip_blocked(seconds: int | None = None) -> None:
+    global _blocked_until
+    with _blocked_lock:
+        _blocked_until = max(_blocked_until, time.time() + (seconds or BLOCK_MEMORY))
+
+
+def ip_recently_blocked() -> bool:
+    with _blocked_lock:
+        return time.time() < _blocked_until
+
+
+def clear_ip_blocked() -> None:
+    global _blocked_until
+    with _blocked_lock:
+        _blocked_until = 0.0
 
 # --------------------------------------------------------------------------
 # small helpers
@@ -105,6 +151,32 @@ def js_runtimes():
         if shutil.which(exe):
             return {_JS_ALIASES.get(exe, exe): {}}
     return None
+
+
+def aria2c_path():
+    """Return the aria2c binary if present.
+
+    Free proxies usually cap a single TCP connection at a few hundred KB/s.
+    Splitting the file across 16 connections (aria2c ``-x16``) measured ~1.8x
+    faster than a single connection, which is what makes the YouTube-proxy
+    path fast enough to be the *preferred* source instead of a slow last resort.
+    """
+    return shutil.which("aria2c")
+
+
+def _aria2c_args() -> list[str]:
+    return [
+        "-x", str(ARIA2_CONNECTIONS),
+        "-s", str(ARIA2_CONNECTIONS),
+        "-k", "1M",
+        "--min-split-size=1M",
+        "--max-tries=1",
+        "--retry-wait=0",
+        "--summary-interval=0",
+        "--console-log-level=warn",
+        "--allow-overwrite=true",
+        "--auto-file-renaming=false",
+    ]
 
 
 def env_proxy():
@@ -256,6 +328,7 @@ class ProxyPool:
     def __init__(self) -> None:
         self._good: list[str] = []
         self._bad: set[str] = set()
+        self._speed: dict[str, float] = {}
         self._lock = threading.Lock()
         self._refreshing = False
         self._last_refresh = 0.0
@@ -273,6 +346,11 @@ class ProxyPool:
                 return
             self._good = [p for p in data.get("good", []) if _PROXY_RE.match(p)]
             self._bad = set(data.get("bad", []))
+            self._speed = {
+                p: float(v)
+                for p, v in (data.get("speed") or {}).items()
+                if _PROXY_RE.match(p)
+            }
             self._last_refresh = float(data.get("ts", 0))
             if self._good:
                 logger.info(f"Proxy pool: loaded {len(self._good)} cached proxies")
@@ -285,7 +363,12 @@ class ProxyPool:
             tmp = CACHE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(
-                    {"ts": time.time(), "good": self._good, "bad": list(self._bad)[:400]},
+                    {
+                        "ts": time.time(),
+                        "good": self._good,
+                        "bad": list(self._bad)[:400],
+                        "speed": self._speed,
+                    },
                     fh,
                 )
             os.replace(tmp, CACHE_FILE)
@@ -299,24 +382,38 @@ class ProxyPool:
             return len(self._good)
 
     def get(self, count: int = PROXY_MAX_TRIES) -> list[str]:
-        """Return up to ``count`` live proxies, rotating the start point."""
+        """Return up to ``count`` live proxies, fastest first.
+
+        Speed matters a lot: a 60 KB/s proxy turns a 5 MB song into a 90 s
+        download, while a 400 KB/s proxy does it in ~12 s.  Proxies are ordered
+        by their measured googlevideo throughput so the race starts with the
+        quickest ones (unknown-speed proxies are kept in the middle).
+        """
         with self._lock:
             pool = [p for p in self._good if p not in self._bad]
             if not pool:
                 return []
-            self._cursor = (self._cursor + 1) % max(len(pool), 1)
-            pool = pool[self._cursor :] + pool[: self._cursor]
+            pool.sort(key=lambda p: self._speed.get(p, 0.0), reverse=True)
             return pool[:count]
 
     def mark_bad(self, proxy: str) -> None:
         with self._lock:
             self._bad.add(proxy)
+            self._speed.pop(proxy, None)
             if proxy in self._good:
                 self._good.remove(proxy)
         self._save()
 
     def mark_good(self, proxy: str) -> None:
         with self._lock:
+            self._bad.discard(proxy)
+            if proxy not in self._good:
+                self._good.append(proxy)
+        self._save()
+
+    def mark_speed(self, proxy: str, kbps: float) -> None:
+        with self._lock:
+            self._speed[proxy] = float(kbps)
             self._bad.discard(proxy)
             if proxy not in self._good:
                 self._good.append(proxy)
@@ -367,16 +464,80 @@ class ProxyPool:
             return None
 
     @staticmethod
-    def _passes_youtube(proxy: str, timeout: int = 30) -> bool:
+    def _passes_youtube(proxy: str, timeout: int = PROXY_DEEP_TIMEOUT) -> bool:
         """True when the proxy can actually extract a normally-blocked video."""
         try:
-            opts = base_opts(proxy=proxy, extra={"socket_timeout": timeout, "retries": 0,
-                                                 "extractor_retries": 0, "simulate": True})
+            opts = base_opts(
+                proxy=proxy,
+                extra={
+                    "socket_timeout": timeout,
+                    "retries": 0,
+                    "extractor_retries": 0,
+                    "simulate": True,
+                    "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
+                },
+            )
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(_PROBE_URL, download=False)
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _probe_speed(proxy: str, timeout: int = PROXY_DEEP_TIMEOUT,
+                     sample_bytes: int = 700_000):
+        """Extract the probe video *and* measure googlevideo throughput.
+
+        Returns KB/s when the proxy works, else ``None``.  Measuring the real
+        googlevideo speed (instead of a generic endpoint) is what lets the pool
+        keep only proxies that are actually quick for YouTube downloads.
+        """
+        try:
+            opts = base_opts(
+                proxy=proxy,
+                extra={
+                    "socket_timeout": timeout,
+                    "retries": 0,
+                    "extractor_retries": 0,
+                    "simulate": True,
+                    "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
+                },
+            )
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(_PROBE_URL, download=False)
+            fmts = info.get("formats") or []
+            audio = [
+                f for f in fmts
+                if f.get("url") and f.get("acodec") not in (None, "none")
+                and f.get("vcodec") in (None, "none")
+            ] or [f for f in fmts if f.get("url")]
+            if not audio:
+                return None
+            fmt = max(audio, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+            headers = dict(fmt.get("http_headers") or {})
+            headers.setdefault("User-Agent", UA)
+            headers["Range"] = f"bytes=0-{sample_bytes}"
+
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler(
+                    {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+                )
+            )
+            req = urllib.request.Request(fmt["url"], headers=headers)
+            start = time.time()
+            got = 0
+            with opener.open(req, timeout=timeout) as resp:
+                while got < sample_bytes:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    got += len(chunk)
+            dt = time.time() - start
+            if got < 120_000 or dt <= 0:
+                return None
+            return got / 1024.0 / dt
+        except Exception:
+            return None
 
     def _refresh_sync(self) -> None:
         started = time.time()
@@ -398,21 +559,42 @@ class ProxyPool:
             if not reachable:
                 return
 
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                results = list(ex.map(self._passes_youtube, reachable[:80]))
+            # Test the fastest-connecting ones first and measure their real
+            # googlevideo throughput.  Keep the quickest - a slow proxy makes a
+            # 5 MB song take 90 s, a fast one does it in ~12 s.
+            probe_batch = reachable[: PROXY_POOL_TARGET * 8]
+            good: list[tuple[str, float]] = []
+            with ThreadPoolExecutor(max_workers=PROXY_DEEP_WORKERS) as ex:
+                futs = {ex.submit(self._probe_speed, p): p for p in probe_batch}
+                for fut in as_completed(futs):
+                    p = futs[fut]
+                    try:
+                        kbps = fut.result()
+                    except Exception:  # noqa: BLE001
+                        kbps = None
+                    if kbps:
+                        good.append((p, kbps))
+                    if len(good) >= PROXY_POOL_TARGET * 3:
+                        break
+                for f in futs:
+                    f.cancel()
 
-            good = [p for p, ok in zip(reachable[:80], results) if ok]
+            # fastest first, then keep the best PROXY_POOL_TARGET*2
+            good.sort(key=lambda x: -x[1])
+            good = good[: max(PROXY_POOL_TARGET * 2, 12)]
             with self._lock:
-                for p in good:
+                for p, kbps in good:
+                    self._speed[p] = kbps
                     if p not in self._good:
                         self._good.append(p)
                 # keep the list bounded
                 self._good = self._good[: max(PROXY_POOL_TARGET * 3, 30)]
                 self._last_refresh = time.time()
             self._save()
+            best = f", best {good[0][1]:.0f} KB/s" if good else ""
             logger.info(
                 f"Proxy pool: {len(good)} working proxies found in "
-                f"{time.time() - started:.0f}s (pool size {self.size})"
+                f"{time.time() - started:.0f}s (pool size {self.size}{best})"
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Proxy pool: refresh failed: {exc}")
@@ -629,24 +811,46 @@ def make_still_video(vid_id: str, audio_path: str, out_path: str,
 # --------------------------------------------------------------------------
 
 
-def _ytdlp_with_proxy(vid_id: str, video: bool, proxy: str) -> str | None:
+def _proxy_tag(proxy: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z]", "", proxy)
+
+
+def _ytdlp_with_proxy(vid_id: str, video: bool, proxy: str,
+                      out_base: str | None = None) -> str | None:
+    """Download ``vid_id`` through ``proxy``. Returns the produced file path."""
     url = f"https://www.youtube.com/watch?v={vid_id}"
-    out_base = os.path.join(DOWNLOAD_DIR, vid_id)
+    base = out_base or os.path.join(DOWNLOAD_DIR, vid_id)
     if video:
-        target = out_base + ".mp4"
+        target = base + ".mp4"
         fmt = (
             "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
             "bestvideo[height<=720][vcodec!*=av01]+bestaudio/"
             "best[height<=720][vcodec^=avc1]/best[height<=720]/best"
         )
     else:
-        target = out_base + ".mp3"
-        fmt = "bestaudio/best"
+        target = base + ".mp3"
+        # Prefer the small m4a audio track (~128 kbps, ~4-5 MB) so a slow proxy
+        # has far fewer bytes to move; fall back to whatever audio exists.
+        fmt = (
+            "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio[ext=webm]/"
+            "bestaudio/best"
+        )
 
-    if os.path.exists(target) and os.path.getsize(target) > 0:
-        return target
-
-    opts = base_opts(proxy=proxy, extra={"outtmpl": out_base + ".%(ext)s", "format": fmt})
+    extra = {
+        "outtmpl": base + ".%(ext)s",
+        "format": fmt,
+        "socket_timeout": PROXY_DL_TIMEOUT,
+        "retries": 1,
+        "fragment_retries": 2,
+        "extractor_retries": 0,
+        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
+    }
+    # Multi-connection download through the proxy (big speed win on free proxies).
+    if aria2c_path():
+        extra["external_downloader"] = {"default": "aria2c"}
+        extra["external_downloader_args"] = {"aria2c": _aria2c_args()}
+        extra["concurrent_fragment_downloads"] = max(4, ARIA2_CONNECTIONS // 2)
+    opts = base_opts(proxy=proxy, extra=extra)
     if video:
         opts["merge_output_format"] = "mp4"
     else:
@@ -658,42 +862,118 @@ def _ytdlp_with_proxy(vid_id: str, video: bool, proxy: str) -> str | None:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"proxy download failed via {proxy}: {str(exc)[:120]}")
+        logger.info(f"proxy {proxy} failed for {vid_id}: {str(exc)[:110]}")
+        _cleanup(base)
         return None
 
     if os.path.exists(target) and os.path.getsize(target) > 0:
         return target
     import glob as _glob
 
-    for f in _glob.glob(out_base + ".*"):
+    for f in _glob.glob(base + ".*"):
         if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")) and os.path.getsize(f) > 0:
             return f
+    _cleanup(base)
     return None
 
 
+def _cleanup(base: str) -> None:
+    """Remove partial/leftover files for one attempt."""
+    import glob as _glob
+
+    for f in _glob.glob(base + ".*"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
 async def _try_proxies(vid_id: str, video: bool) -> str | None:
+    """Race several proxies at once - first one to finish wins.
+
+    Sequential attempts could take minutes; racing ``PROXY_RACE`` proxies makes
+    the YouTube path finish in the time of the single fastest working proxy.
+    """
     if (os.environ.get("PROXY_POOL_ENABLED", "1") or "1").lower() in ("0", "false", "no", "off"):
         return None
-    # Give a cold pool a short chance to fill up.
-    await PROXY_POOL.ensure(min_good=1, wait=25 if PROXY_POOL.size == 0 else 0)
-    proxies = PROXY_POOL.get(PROXY_MAX_TRIES)
+
+    # A cold pool needs a moment; a warm one is used immediately.
+    await PROXY_POOL.ensure(min_good=1, wait=30 if PROXY_POOL.size == 0 else 0)
+
+    proxies = PROXY_POOL.get(max(PROXY_MAX_TRIES, PROXY_RACE))
     if not proxies:
         return None
+
     loop = asyncio.get_running_loop()
-    logger.info(f"YouTube blocked -> trying {len(proxies)} pooled proxies for {vid_id}")
-    for proxy in proxies:
-        try:
-            path = await asyncio.wait_for(
-                loop.run_in_executor(None, _ytdlp_with_proxy, vid_id, video, proxy),
-                timeout=600,
-            )
-        except Exception:
-            path = None
-        if path:
-            PROXY_POOL.mark_good(proxy)
-            logger.info(f"Downloaded {vid_id} through proxy {proxy}")
-            return path
-        PROXY_POOL.mark_bad(proxy)
+    final = os.path.join(DOWNLOAD_DIR, vid_id)
+    if video:
+        final += ".mp4"
+    else:
+        final += ".mp3"
+
+    logger.info(f"YouTube blocked -> racing {min(PROXY_RACE, len(proxies))} proxies for {vid_id}")
+
+    for start in range(0, len(proxies), PROXY_RACE):
+        batch = proxies[start : start + PROXY_RACE]
+        if not batch:
+            break
+        batch_start = time.time()
+        # NOTE: run_in_executor already returns a Future - do NOT wrap it in
+        # asyncio.create_task (that raises TypeError and silently kills the
+        # whole YouTube-proxy path).  asyncio.wait() accepts futures directly.
+        tasks: dict[asyncio.Future, tuple[str, str]] = {}
+        for proxy in batch:
+            base = os.path.join(DOWNLOAD_DIR, f".race_{vid_id}_{_proxy_tag(proxy)}")
+            fut = loop.run_in_executor(None, _ytdlp_with_proxy, vid_id, video, proxy, base)
+            tasks[fut] = (proxy, base)
+
+        pending = set(tasks)
+        winner: str | None = None
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                proxy, base = tasks[task]
+                try:
+                    result = task.result()
+                except Exception:
+                    result = None
+                if result and os.path.exists(result) and os.path.getsize(result) > 0:
+                    if winner is None:
+                        winner = result
+                        # remember how fast this proxy was for next time
+                        try:
+                            kbps = os.path.getsize(result) / 1024.0 / max(
+                                time.time() - batch_start, 0.1
+                            )
+                        except Exception:  # noqa: BLE001
+                            kbps = 0.0
+                        PROXY_POOL.mark_speed(proxy, kbps)
+                        logger.info(
+                            f"proxy {proxy} won the race for {vid_id} "
+                            f"({kbps:.0f} KB/s)"
+                        )
+                else:
+                    PROXY_POOL.mark_bad(proxy)
+            if winner:
+                for task in pending:
+                    task.cancel()
+                break
+
+        # drop the losers' partial files
+        for proxy, base in tasks.values():
+            if winner and base in winner:
+                continue
+            _cleanup(base)
+
+        if winner:
+            try:
+                if os.path.exists(final):
+                    os.remove(final)
+                shutil.move(winner, final)
+            except Exception:  # noqa: BLE001
+                return winner
+            return final
+
     return None
 
 
@@ -758,7 +1038,7 @@ async def fallback_download(vid_id: str, video: bool = False,
     proxy_task = asyncio.create_task(_try_proxies(vid_id, video))
     sc_task = asyncio.create_task(_try_soundcloud(vid_id, video, title))
 
-    head_start = _int_env("FALLBACK_HEAD_START", 0)
+    head_start = FALLBACK_HEAD_START
     try:
         done, _ = await asyncio.wait({proxy_task}, timeout=head_start)
         if proxy_task in done:
