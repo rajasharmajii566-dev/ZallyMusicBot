@@ -20,6 +20,7 @@ from PritiMusic import LOGGER
 from PritiMusic.utils.database import is_on_off
 from PritiMusic.utils.formatters import time_to_seconds
 from config import YT_API_KEY, YTPROXY_URL as YTPROXY
+from PritiMusic.platforms.ytfallback import fallback_download, PROXY_POOL
 
 logger = LOGGER(__name__)
 
@@ -318,12 +319,26 @@ async def ytdlp_download(vid_id: str, video: bool = False):
                 if os.path.getsize(f) > 0:
                     return f
 
+    # ------------------------------------------------------------------
+    # Last resort: pooled free proxies, then SoundCloud (title based).
+    # This is what keeps /play alive on a blocked datacenter IP even when
+    # the user has not supplied cookies or a residential proxy.
+    # ------------------------------------------------------------------
+    try:
+        path = await fallback_download(vid_id, video=video)
+        if path:
+            logger.info(f"Fallback downloader produced {path} for {vid_id}")
+            return path
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"fallback_download failed for {vid_id}: {type(e).__name__}: {e}")
+
     if bot_blocked:
         logger.error(
             f"YouTube is blocking this server's IP for {vid_id} "
-            "('Sign in to confirm you're not a bot'). Fix: add YouTube cookies "
-            "(cookies/cookies.txt or the COOKIES env var) or set YT_PROXY to a "
-            "residential proxy — see README."
+            "('Sign in to confirm you're not a bot') and every fallback "
+            "(proxy pool + SoundCloud) also failed. Best fix: add YouTube "
+            "cookies (cookies/cookies.txt, COOKIES or COOKIES_BASE64 env var) "
+            "or set YT_PROXY to a residential proxy — see README."
         )
     elif last_error is not None:
         logger.error(

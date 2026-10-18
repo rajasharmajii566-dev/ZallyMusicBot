@@ -130,3 +130,46 @@ STRING_SESSION=BQIL8fAAXMLp880OTfLuth4Bnw51LLv-kYH_wrDQ4DWBHNHyCeMLSE9ptPU39sLuQ
 
 > ⚠️ Your `BOT_TOKEN` and `STRING_SESSION` were shared in plain text — rotate them
 > (BotFather /revoke, and regenerate the string session) once you're done testing.
+---
+
+## Round 4 — "Songs still don't play" (fixed for real this time)
+
+**Reported:** the same `Sign in to confirm you're not a bot` error even after
+Round 3, on a datacenter IP with no cookies.
+
+**Diagnosis (re-confirmed):** the block is purely IP based. Re-tested from the
+sandbox (`52.12.117.99`): `dQw4w9WgXcQ` extracted fine while `jNQXAC9IVRw`,
+`kJQP7kiw5Fk` and `BddP6PYo2gs` all returned `LOGIN_REQUIRED`. Cookies and PO
+tokens do not help — only a different exit IP does.
+
+**What was added — `PritiMusic/platforms/ytfallback.py` (new):**
+
+| Layer | What it does |
+| --- | --- |
+| **Free-proxy pool** | Scrapes 6 public proxy lists, latency-tests every candidate against YouTube (50 threads), then deep-tests each survivor by extracting a known-blocked video. Working proxies are cached in `downloads/.proxy_pool.json` for 40 min and rotated per download. |
+| **SoundCloud fallback** | YouTube's public **oEmbed** endpoint still works while the player API is blocked, so the real song title is read from there, cleaned (`Kesariya - Brahmastra | Ranbir Kapoor, Alia Bhatt | ...` becomes `Kesariya - Brahmastra`) and searched on SoundCloud. |
+| **Relevance guard** | Unicode-folded keyword overlap plus a penalty for `remix / cover / slowed / 8d / karaoke / ...` so the original track wins and the wrong song is never played. |
+| **Still-image video** | `/vplay` gets the SoundCloud audio muxed with the YouTube thumbnail into an H.264/AAC MP4 that Telegram voice chats can decode. |
+| **Parallel race** | Both paths run at once; the first usable file wins (SoundCloud ≈ 8-16 s, proxy ≈ 30-200 s). |
+
+`ytdlp_download()` now ends with `await fallback_download(...)`, so `/play`,
+`/vplay` and `/song` never die on the block. `PritiMusic/__main__.py` warms the
+proxy pool in the background at startup.
+
+**Verified live (all from the blocked IP, no cookies):**
+
+| Test | Result |
+| --- | --- |
+| `ytdlp_download("BddP6PYo2gs")` — Kesariya, blocked | ✅ `downloads/BddP6PYo2gs.mp3`, 6.78 MB, 192 kbps, **16 s** |
+| `ytdlp_download("9bZkp7q19f0", video=True)` — Gangnam Style, blocked | ✅ `downloads/9bZkp7q19f0.mp4`, 5.97 MB, **h264 + aac**, 221 s, **27 s** |
+| `ytdlp_download("kJQP7kiw5Fk")` — Despacito, blocked | ✅ via proxy `41.216.186.161:8080`, 6.76 MB, 192 kbps |
+| Proxy pool scan | ✅ 11 working proxies found in 196 s |
+| SoundCloud title match | ✅ `Kesariya - Brahmastra` (similarity 1.00) chosen over remix/cover |
+
+**New env vars (all optional):** `PROXY_POOL_ENABLED`, `PROXY_SCAN_LIMIT`,
+`PROXY_POOL_TARGET`, `PROXY_MAX_TRIES`, `SOUNDCLOUD_FALLBACK`,
+`SOUNDCLOUD_MIN_MATCH`, `FALLBACK_HEAD_START`.
+
+> Cookies / `YT_PROXY` are still tried **first** when configured — they give the
+> exact YouTube audio and the best quality. The new layers are the safety net
+> for when neither is available.

@@ -38,6 +38,14 @@ async def init():
         importlib.import_module("PritiMusic.plugins" + all_module)
     LOGGER("PritiMusic.plugins").info("Successfully Imported Modules...")
     await userbot.start()
+    # Warm up the free-proxy pool in the background so that /play survives
+    # YouTube's "Sign in to confirm you're not a bot" IP block.
+    try:
+        from PritiMusic.platforms.ytfallback import PROXY_POOL
+
+        asyncio.create_task(PROXY_POOL.warmup())
+    except Exception as _e:  # noqa: BLE001
+        LOGGER("PritiMusic").warning(f"Proxy pool warmup could not start: {_e}")
     await Lucky.start()
     try:
         await Lucky.stream_call("https://te.legra.ph/file/29f784eb49d230ab62e9e.mp4")

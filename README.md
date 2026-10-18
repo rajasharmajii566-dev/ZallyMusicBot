@@ -124,9 +124,29 @@ with “No supported JavaScript runtime could be found”.
 
 `yt-dlp` is invoked with a JavaScript runtime, the EJS challenge solver
 (`--remote-components ejs:github`), generous retries and several YouTube player
-clients (`default → android → ios → web_safari → tv_embedded`). If every client
-is rejected with “Sign in to confirm you're not a bot”, the bot logs an explicit
-hint telling you to add cookies or a proxy.
+clients (`default → android → ios → web_safari → tv_embedded`).
+
+If every client is rejected with “Sign in to confirm you're not a bot”, the bot
+**recovers automatically — no cookies required**:
+
+1. **Free-proxy pool** — the bot scrapes public proxy lists, latency-tests them
+   against YouTube and deep-tests every survivor by extracting a known-blocked
+   video. The working ones are cached (`downloads/.proxy_pool.json`, 40 min TTL)
+   and rotated. A proxy with a clean exit IP downloads the exact YouTube audio.
+2. **SoundCloud** — YouTube's public **oEmbed** endpoint still answers while the
+   player API is blocked, so the real song title is read from there, cleaned
+   (`Kesariya - Brahmastra | Ranbir Kapoor, Alia Bhatt | …` → `Kesariya - Brahmastra`)
+   and searched on SoundCloud. A keyword-overlap guard plus a `remix / cover /
+   slowed / 8d` penalty makes sure the **original** track wins.
+3. **Still-image video** — for `/vplay`, the SoundCloud audio is muxed with the
+   YouTube thumbnail into an H.264/AAC MP4 that Telegram voice chats can decode.
+
+Both paths run **in parallel** and the first usable file wins (SoundCloud ≈ 8-16 s,
+proxy ≈ 30-200 s). Cookies and `YT_PROXY` are still tried first when configured,
+because they give the exact YouTube stream at full quality.
+
+Measured from a blocked datacenter IP with **no cookies at all**: Kesariya → 16 s,
+Gangnam Style (`/vplay`) → 27 s. See `FIXES.md` → *Round 4* for the full log.
 
 ---
 

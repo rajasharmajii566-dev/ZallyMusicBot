@@ -1,37 +1,28 @@
-# ZallyMusicBot Fix — Todo
+# ZallyMusicBot — Round 4: Make songs ACTUALLY play (no cookies needed)
 
-## Phase 1: Recon & Environment  ✅
-- [x] Inspect repo structure and download logic (Youtube.py)
-- [x] Install ffmpeg + yt-dlp, verify Python env
-- [x] Reproduce: audio + video download WORK from sandbox IP (AWS us-west-2)
-- [x] Confirm block is IP-specific ("Sign in to confirm you're not a bot" on datacenter IPs)
-- [x] Validate assistant STRING_SESSION (7809063450 / @Nglord910)
-- [x] Boot bot successfully (Music Bot Started + Assistant + PyTgCalls)
+## Phase A: Re-diagnose current state
+- [ ] Confirm current sandbox IP still blocked by YouTube
+- [ ] Check if IP changed / partial block (some videos work)
+- [ ] Confirm error originates from my sandbox (not user's Railway)
 
-## Phase 2: Diagnose the YouTube block  ✅
-- [x] Determine cause: datacenter IP + missing cookies + missing JS runtime + no PO token
-- [x] Confirm modern yt-dlp needs a JS runtime (node) + EJS challenge solver
-- [x] Confirm failing videos return "visionos player response playability status: LOGIN_REQUIRED"
-- [x] Confirm "PO Token Providers: none" (no token provider installed)
+## Phase B: Find a working alternative source
+- [ ] Test Invidious instances (audio stream endpoint)
+- [ ] Test Piped instances (streams API)
+- [ ] Test JioSaavn / other music APIs (Hindi songs)
+- [ ] Test free/public proxies with yt-dlp
+- [ ] Pick the most reliable working source
 
-## Phase 3: Implement the fix  ✅
-- [x] Harden yt-dlp options (js_runtimes node + remote_components ejs:github)
-- [x] Multi-client retries (default → android → ios → web_safari → tv_embedded)
-- [x] Robust cookie loading (file + COOKIES + COOKIES_BASE64 env)
-- [x] Optional proxy support (YT_PROXY / YTDLP_PROXY / PROXY_URL)
-- [x] Clearer error handling + actionable "add cookies" message
-- [x] Pin yt-dlp>=2025.9.5 in requirements
-- [x] cookies/ folder + README + .gitignore entry
-- [x] Update README + .env.example
+## Phase C: Implement multi-source fallback in code
+- [ ] Add fallback downloader chain in Youtube.py
+- [ ] Wire it into download() so /play never dies on YT block
+- [ ] Keep cookies/proxy as highest priority when present
 
-## Phase 4: Verify  ⏳
-- [x] Unit-check: js_runtimes/remote_components/cookie_args wired correctly
-- [ ] Direct download() test (audio mp3 + video h264 mp4) on a non-blocked video
-- [ ] PO-token provider (bgutil) build + test — does it fix blocked videos?
-- [ ] End-to-end /play test through Telegram (assistant sends command)
-- [ ] Bot running & responsive
+## Phase D: Verify end-to-end
+- [ ] Direct download test on a BLOCKED video -> file produced
+- [ ] Bot boot + /play e2e
+- [ ] Confirm audio plays (ffprobe duration/codec)
 
-## Phase 5: Deliver  ⏳
-- [ ] Commit & push fixes to GitHub
-- [ ] Update FIXES.md
-- [ ] Provide summary + run instructions
+## Phase E: Deliver
+- [ ] Commit & push to GitHub
+- [ ] Restart bot ON
+- [ ] Summary to user

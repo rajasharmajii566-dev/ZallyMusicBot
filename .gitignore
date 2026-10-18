@@ -10,3 +10,4 @@ cookies/*.txt
 cookies/logs.csv
 __pycache__/
 *.session-journal
+bot_run.log
