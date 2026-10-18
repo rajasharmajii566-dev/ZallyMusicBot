@@ -15,25 +15,30 @@ User asks (Hinglish):
 - [x] Use the executor Future directly (asyncio.wait accepts futures)
 - [x] Verified: proxy path now downloads the exact YouTube audio (kJQP7kiw5Fk, 6.76 MB)
 
-## Phase C: Make YouTube the preferred source
-- [ ] Add a source preference so YouTube (proxy) wins when it works
-- [ ] Give the proxy path a configurable head start over SoundCloud
-- [ ] Keep SoundCloud strictly as a fallback (never silently preferred)
+## Phase C: Make YouTube the preferred source ✅
+- [x] `FALLBACK_HEAD_START=30` — YouTube (proxy) gets a head start; SoundCloud may only win after
+- [x] SoundCloud kept strictly as a safety net
+- [x] Verified: YouTube wins for kJQP7kiw5Fk (14.0 s), BddP6PYo2gs (15.6 s), Umqb9KENgmk (36.7 s)
 
-## Phase D: Speed tuning
-- [ ] Test aria2c multi-connection through a proxy (does it beat single-conn?)
-- [ ] Add a bandwidth test to the pool so fast proxies are preferred
-- [ ] Bound the worst case so a song never waits minutes
+## Phase D: Speed tuning ✅
+- [x] Speed-ranked pool: `_probe_speed` measures real googlevideo throughput; pool sorted fastest-first
+- [x] Winner-speed feedback stored so the pool keeps improving
+- [x] Smaller m4a audio track preferred (fewer bytes for a slow proxy)
+- [x] Parallel race of the 4 fastest proxies (first to finish wins)
+- [x] Fail-fast timeouts + block memory + download cache
+- [x] Tested aria2c multi-connection (1.8x on a good proxy) — off by default (too flaky on free proxies), single-connection retry kept as safety
+- [x] Dockerfile installs aria2 (option available via `ARIA2_CONNECTIONS`)
 
 ## Phase E: Links ✅
 - [x] config.py SUPPORT_CHANNEL / SUPPORT_CHAT -> https://t.me/rajamods7_ontop
 - [x] userbot.py join_chat x5 -> rajamods7_ontop
 - [x] .env + .env.example updated
 
-## Phase F: Verify + ship
-- [ ] End-to-end test (YouTube wins, correct track, reasonable time)
-- [ ] Delete temp test scripts
-- [ ] Update FIXES.md / README.md / .env.example
-- [ ] Commit + push to GitHub
-- [ ] Restart bot ON
-- [ ] Report to user (they will deploy to Railway)
+## Phase F: Verify + ship ✅
+- [x] End-to-end tests: YouTube audio + real YouTube MP4 (/vplay)
+- [x] LIVE Telegram request -> real YouTube MP4 (`kfdplJ49_f0`, proxy @ 410 KB/s)
+- [x] Temp test scripts deleted
+- [x] FIXES.md / README.md / .env.example updated
+- [x] Committed + pushed to GitHub (e9567a6, 2a6d70a)
+- [x] Bot restarted and ON (PID 9274)
+- [x] Report to user (they will deploy to Railway)
