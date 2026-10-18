@@ -6,5 +6,7 @@ log.txt
 raw_files/
 cache/
 downloads/
+cookies/*.txt
+cookies/logs.csv
 __pycache__/
 *.session-journal

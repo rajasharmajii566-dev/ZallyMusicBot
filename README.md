@@ -36,6 +36,8 @@ with both **audio** and **video** voice-chat streaming.
 | `YT_API_KEY` | ⬜ | optional paid backend; **not needed** thanks to the yt-dlp fallback |
 | `YTPROXY_URL` | ⬜ | optional paid backend endpoint |
 | `COOKIES` | ⬜* | **recommended on Railway** — raw `cookies.txt` contents (see below) |
+| `COOKIES_BASE64` | ⬜* | base64 of the same file (use when newlines get mangled) |
+| `YT_PROXY` | ⬜ | residential/rotating proxy for yt-dlp (`http(s)://` or `socks5://`) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | ⬜ | only for Spotify links |
 | `HEROKU_API_KEY` / `HEROKU_APP_NAME` | ⬜ | only for Heroku |
 
@@ -85,6 +87,8 @@ Give the bot cookies in either way:
 1. **File** — save a Netscape-format `cookies.txt` into the `cookies/` folder.
 2. **Env var** — set `COOKIES` to the raw file contents (best on Railway, where
    you can't upload files). `YOUTUBE_COOKIES` works too.
+3. **Base64 env var** — set `COOKIES_BASE64` to `base64 -w0 cookies.txt`. Use
+   this if your host strips newlines from multi-line variables.
 
 How to export `cookies.txt`:
 
@@ -93,8 +97,36 @@ How to export `cookies.txt`:
 - Open the extension → **Export** → save `cookies.txt`.
 - Paste its contents into the `COOKIES` variable, or drop the file in `cookies/`.
 
-> Without cookies, `/play` and `/vplay` reply with a clear
+### Can't use an account? Use a proxy
+
+Cookies are the most reliable fix, but a **residential/rotating proxy** also
+works and needs no account. Set `YT_PROXY` (or `YTDLP_PROXY` / `PROXY_URL`):
+
+```
+YT_PROXY=http://user:pass@host:port
+```
+
+The bot routes every yt-dlp request (downloads, playlists, format lookups)
+through it.
+
+> Without cookies or a proxy, `/play` and `/vplay` reply with a clear
 > “Download failed … add cookies” message instead of crashing with `TypeError`.
+
+### JavaScript runtime (required by modern yt-dlp)
+
+yt-dlp 2025+ needs a JavaScript runtime (Node/Deno) to solve YouTube's
+signature / `n` challenge. The bundled `Dockerfile` uses
+`nikolaik/python-nodejs` so **Node is already present** — nothing to do. On a
+bare VPS, install Node (`apt install nodejs`) or Deno, otherwise downloads fail
+with “No supported JavaScript runtime could be found”.
+
+### What the downloader does now
+
+`yt-dlp` is invoked with a JavaScript runtime, the EJS challenge solver
+(`--remote-components ejs:github`), generous retries and several YouTube player
+clients (`default → android → ios → web_safari → tv_embedded`). If every client
+is rejected with “Sign in to confirm you're not a bot”, the bot logs an explicit
+hint telling you to add cookies or a proxy.
 
 ---
 

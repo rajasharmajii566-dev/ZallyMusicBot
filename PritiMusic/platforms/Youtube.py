@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from typing import Union
 import string
@@ -22,6 +23,29 @@ from config import YT_API_KEY, YTPROXY_URL as YTPROXY
 
 logger = LOGGER(__name__)
 
+def _cookies_from_env():
+    """Return raw Netscape cookies.txt contents from the environment, or ''.
+
+    Accepts plain text (``COOKIES`` / ``YOUTUBE_COOKIES``) or base64
+    (``COOKIES_BASE64`` / ``YOUTUBE_COOKIES_BASE64``) so the value survives
+    hosts (Railway/Heroku) that mangle newlines and special characters.
+    """
+    raw = (os.getenv("COOKIES") or os.getenv("YOUTUBE_COOKIES") or "").strip()
+    if raw:
+        return raw.replace("\\n", "\n")
+    b64 = (
+        os.getenv("COOKIES_BASE64")
+        or os.getenv("YOUTUBE_COOKIES_BASE64")
+        or ""
+    ).strip()
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8", "ignore")
+        except Exception:
+            return ""
+    return ""
+
+
 def cookie_txt_file():
     """Return a relative path to a yt-dlp cookie file, or ``None``.
 
@@ -29,22 +53,28 @@ def cookie_txt_file():
     (Railway, AWS, GCP, ...). YouTube answers those IPs with
     "Sign in to confirm you're not a bot" otherwise.
 
-    Provide them in either of these ways:
-      * drop a Netscape-format ``cookies.txt`` into the ``cookies/`` folder, or
+    Provide them in any of these ways:
+      * drop a Netscape-format ``cookies.txt`` into the ``cookies/`` folder,
       * set the ``COOKIES`` (or ``YOUTUBE_COOKIES``) env var to the raw file
-        contents (handy on Railway/Heroku where you can't upload files).
+        contents, or
+      * set ``COOKIES_BASE64`` (or ``YOUTUBE_COOKIES_BASE64``) to its
+        base64-encoded contents (best on Railway/Heroku).
     """
     try:
         folder_path = os.path.join(os.getcwd(), "cookies")
         os.makedirs(folder_path, exist_ok=True)
         # Materialise raw cookies from an env var into cookies/cookies.txt
-        raw = (os.getenv("COOKIES") or os.getenv("YOUTUBE_COOKIES") or "").strip()
+        raw = _cookies_from_env()
         if raw:
             target = os.path.join(folder_path, "cookies.txt")
             if not os.path.exists(target) or os.path.getsize(target) == 0:
                 with open(target, "w", encoding="utf-8") as fh:
-                    fh.write(raw.replace("\\n", "\n"))
-        txt_files = glob.glob(os.path.join(folder_path, "*.txt"))
+                    fh.write(raw)
+        txt_files = [
+            f
+            for f in glob.glob(os.path.join(folder_path, "*.txt"))
+            if os.path.getsize(f) > 0
+        ]
         if not txt_files:
             return None
         chosen = random.choice(txt_files)
@@ -58,17 +88,83 @@ def cookie_txt_file():
         return None
 
 
+def _detect_js_runtimes():
+    """Return a yt-dlp ``js_runtimes`` mapping for the first JS runtime found.
+
+    Modern yt-dlp (2025+) needs a JavaScript runtime to solve YouTube's
+    signature / ``n`` challenge. Without one, YouTube extraction is deprecated
+    and downloads fail. Node ships with our Docker image; Deno/Bun/QuickJS are
+    also accepted.
+    """
+    for name, binary in (
+        ("deno", "deno"),
+        ("node", "node"),
+        ("bun", "bun"),
+        ("quickjs", "qjs"),
+    ):
+        if shutil.which(binary):
+            return {name: {}}
+    return None
+
+
+def _ytdlp_proxy():
+    """Return an optional proxy URL for yt-dlp from the environment."""
+    return (
+        os.getenv("YT_PROXY")
+        or os.getenv("YTDLP_PROXY")
+        or os.getenv("PROXY_URL")
+        or ""
+    ).strip() or None
+
+
+def _ytdlp_common_opts():
+    """Options shared by every yt-dlp call in this module."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "noplaylist": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 3,
+        "socket_timeout": 30,
+        "no_color": True,
+    }
+    js = _detect_js_runtimes()
+    if js:
+        opts["js_runtimes"] = js
+        # EJS challenge-solver component (required alongside a JS runtime).
+        opts["remote_components"] = ["ejs:github"]
+    proxy = _ytdlp_proxy()
+    if proxy:
+        opts["proxy"] = proxy
+    ck = cookie_txt_file()
+    if ck and os.path.exists(ck):
+        opts["cookiefile"] = ck
+    return opts
+
+
 def cookie_args():
-    """Return yt-dlp cookie CLI args only when a valid cookie file exists.
+    """Return yt-dlp CLI args for cookies + JS runtime + proxy.
 
     ``cookie_txt_file()`` returns ``None`` when no cookies are configured, so
     blindly passing ``--cookies None`` would crash yt-dlp. This helper keeps the
     argument list safe for every caller.
     """
+    args = []
     ck = cookie_txt_file()
     if ck and os.path.exists(ck):
-        return ["--cookies", ck]
-    return []
+        args += ["--cookies", ck]
+    js = _detect_js_runtimes()
+    if js:
+        args += ["--js-runtimes", next(iter(js))]
+        args += ["--remote-components", "ejs:github"]
+    proxy = _ytdlp_proxy()
+    if proxy:
+        args += ["--proxy", proxy]
+    return args
 
 
 async def check_file_size(link):
@@ -121,89 +217,120 @@ async def shell_cmd(cmd):
     return out.decode("utf-8")
 
 
+# YouTube player clients to try, in order. ``None`` means "let yt-dlp pick its
+# defaults". The extra clients are fallbacks for datacenter IPs that YouTube
+# answers with "Sign in to confirm you're not a bot".
+_YTDLP_CLIENT_ATTEMPTS = (
+    None,
+    ["android"],
+    ["ios"],
+    ["web_safari", "web"],
+    ["tv_embedded", "mweb"],
+)
+
+
+def _looks_like_bot_block(err: str) -> bool:
+    e = (err or "").lower()
+    return "not a bot" in e or "sign in to confirm" in e
+
+
 async def ytdlp_download(vid_id: str, video: bool = False):
     """Fallback downloader that uses yt-dlp directly.
 
     This makes /play, /vplay, /song etc. work even when no paid
     ``YT_API_KEY`` / ``YTPROXY_URL`` backend is configured.
+
+    It retries with several YouTube player clients because datacenter IPs are
+    frequently answered with "Sign in to confirm you're not a bot". Cookies
+    (``cookies/cookies.txt`` or the ``COOKIES`` env var) and/or a residential
+    proxy (``YT_PROXY``) are still the only *reliable* fix for such IPs.
     """
-    try:
-        os.makedirs("downloads", exist_ok=True)
-        url = f"https://www.youtube.com/watch?v={vid_id}"
-        outtmpl = os.path.join("downloads", f"{vid_id}.%(ext)s")
+    os.makedirs("downloads", exist_ok=True)
+    url = f"https://www.youtube.com/watch?v={vid_id}"
+    outtmpl = os.path.join("downloads", f"{vid_id}.%(ext)s")
+    if video:
+        target = os.path.join("downloads", f"{vid_id}.mp4")
+        # Prefer H.264 (avc1) + AAC (mp4a) so Telegram video chats can actually
+        # decode it. AV1/VP9 are not reliably supported.
+        fmt = (
+            "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+            "bestvideo[height<=720][vcodec!*=av01]+bestaudio/"
+            "best[height<=720][vcodec^=avc1]/best[height<=720]/best"
+        )
+    else:
+        target = os.path.join("downloads", f"{vid_id}.mp3")
+        fmt = "bestaudio/best"
+
+    # Already downloaded?
+    if os.path.exists(target) and os.path.getsize(target) > 0:
+        return target
+
+    if not cookie_txt_file():
+        logger.warning(
+            "No YouTube cookies found. Downloads from datacenter IPs "
+            "(Railway/AWS/GCP) may fail with 'Sign in to confirm you're not a "
+            "bot'. Add cookies/cookies.txt, set the COOKIES env var, or set "
+            "YT_PROXY to a residential proxy (see README)."
+        )
+
+    loop = asyncio.get_running_loop()
+    last_error = None
+    bot_blocked = False
+
+    for client in _YTDLP_CLIENT_ATTEMPTS:
+        opts = _ytdlp_common_opts()
+        opts["outtmpl"] = outtmpl
+        opts["format"] = fmt
         if video:
-            target = os.path.join("downloads", f"{vid_id}.mp4")
-            ydl_opts = {
-                "outtmpl": outtmpl,
-                # Prefer H.264 (avc1) + AAC (mp4a) so Telegram video chats can
-                # actually decode it. AV1/VP9 are not reliably supported.
-                "format": (
-                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
-                    "bestvideo[height<=720][vcodec!*=av01]+bestaudio/"
-                    "best[height<=720][vcodec^=avc1]/best[height<=720]/best"
-                ),
-                "merge_output_format": "mp4",
-                "quiet": True,
-                "no_warnings": True,
-                "nocheckcertificate": True,
-                "geo_bypass": True,
-                "retries": 3,
-                "noplaylist": True,
-            }
+            opts["merge_output_format"] = "mp4"
         else:
-            target = os.path.join("downloads", f"{vid_id}.mp3")
-            ydl_opts = {
-                "outtmpl": outtmpl,
-                "format": "bestaudio/best",
-                "quiet": True,
-                "no_warnings": True,
-                "nocheckcertificate": True,
-                "geo_bypass": True,
-                "retries": 3,
-                "noplaylist": True,
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }
-                ],
-            }
-        _ck = cookie_txt_file()
-        if _ck:
-            ydl_opts["cookiefile"] = _ck
-            logger.info(f"yt-dlp using cookie file: {_ck}")
-        else:
-            logger.warning(
-                "No YouTube cookies found. Downloads from datacenter IPs "
-                "(Railway/AWS/GCP) will fail with 'Sign in to confirm you're "
-                "not a bot'. Add cookies/cookies.txt or set the COOKIES env var."
-            )
+            opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ]
+        if client:
+            opts["extractor_args"] = {"youtube": {"player_client": client}}
 
-        if os.path.exists(target) and os.path.getsize(target) > 0:
-            return target
-
-        loop = asyncio.get_running_loop()
-
-        def _run():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        def _run(_opts=opts):
+            with yt_dlp.YoutubeDL(_opts) as ydl:
                 ydl.download([url])
 
-        await loop.run_in_executor(None, _run)
+        try:
+            await loop.run_in_executor(None, _run)
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            if _looks_like_bot_block(str(e)):
+                bot_blocked = True
+            logger.warning(
+                f"yt-dlp attempt failed for {vid_id} "
+                f"(client={client or 'default'}): {type(e).__name__}: {e}"
+            )
+            continue
 
         if os.path.exists(target) and os.path.getsize(target) > 0:
             return target
-        # Fallback: pick up whatever file yt-dlp produced
+        # Pick up whatever file yt-dlp produced.
         for f in glob.glob(os.path.join("downloads", f"{vid_id}.*")):
             if f.endswith((".mp3", ".mp4", ".m4a", ".webm", ".mkv")):
                 if os.path.getsize(f) > 0:
                     return f
-        return None
-    except Exception as e:
+
+    if bot_blocked:
         logger.error(
-            f"yt-dlp fallback download failed for {vid_id}: {type(e).__name__}: {e}"
+            f"YouTube is blocking this server's IP for {vid_id} "
+            "('Sign in to confirm you're not a bot'). Fix: add YouTube cookies "
+            "(cookies/cookies.txt or the COOKIES env var) or set YT_PROXY to a "
+            "residential proxy — see README."
         )
-        return None
+    elif last_error is not None:
+        logger.error(
+            f"yt-dlp fallback download failed for {vid_id}: "
+            f"{type(last_error).__name__}: {last_error}"
+        )
+    return None
 
 
 class YouTubeAPI:
@@ -356,9 +483,10 @@ class YouTubeAPI:
             link = link.split("?si=")[0]
         elif "&si=" in link:
             link = link.split("&si=")[0]
-        cookie_part = f"--cookies {cookie_txt_file()} " if cookie_txt_file() else ""
+        extra = " ".join(cookie_args())
+        extra = f"{extra} " if extra else ""
         playlist = await shell_cmd(
-            f"yt-dlp -i --get-id --flat-playlist {cookie_part}--playlist-end {limit} --skip-download {link}"
+            f"yt-dlp -i --get-id --flat-playlist {extra}--playlist-end {limit} --skip-download {link}"
         )
         try:
             result = playlist.split("\n")
@@ -404,7 +532,7 @@ class YouTubeAPI:
             link = link.split("?si=")[0]
         elif "&si=" in link:
             link = link.split("&si=")[0]
-        ytdl_opts = {"quiet": True, "cookiefile" : cookie_txt_file()}
+        ytdl_opts = _ytdlp_common_opts()
         ydl = yt_dlp.YoutubeDL(ytdl_opts)
         with ydl:
             formats_available = []

@@ -21,7 +21,10 @@ speedtest-cli
 spotipy
 tgcrypto
 unidecode
-yt-dlp
+# yt-dlp needs to be recent: 2025+ versions require a JavaScript runtime
+# (node/deno) to solve YouTube's signature/"n" challenge. Older versions fail
+# on most videos. Node is bundled in the Docker image.
+yt-dlp>=2025.9.5
 youtube-search
 youtube-search-python
 py-yt-search

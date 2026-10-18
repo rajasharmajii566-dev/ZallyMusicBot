@@ -67,6 +67,45 @@ Status: **Fixed, tested live against Telegram, and pushed to GitHub.**
 - ✅ `download(video=False)` → `dQw4w9WgXcQ.mp3` (`format_name=mp3`)
 - ✅ `Lucky.join_call(..., video=True)` → **`JOIN_OK`**, assistant joined the video chat, `participants: 2`
 
+## Round 3 — "Sign in to confirm you're not a bot" (downloads blocked)
+
+**Symptom:** `/play` and `/vplay` replied
+
+> ❌ Download failed. YouTube blocked this request from the server's IP
+> ('Sign in to confirm you're not a bot'). Fix: add YouTube cookies …
+
+**Root cause:** YouTube blocks the *server's IP* (Railway/AWS/GCP datacenter
+ranges) and demands a logged-in session. This is **not** something code can
+bypass — a PO Token does **not** fix it (verified: with a bgutil PO-Token
+provider installed, YouTube still returned
+`visionos player response playability status: LOGIN_REQUIRED`). Modern yt-dlp
+also needs a **JavaScript runtime** to solve YouTube's signature/`n` challenge,
+which the old code never configured.
+
+**Fixes (all in `PritiMusic/platforms/Youtube.py` unless noted):**
+
+| Change | Detail |
+|---|---|
+| JavaScript runtime | `js_runtimes = {"node": {}}` + `remote_components = ["ejs:github"]` on every yt-dlp call |
+| Multi-client retries | tries `default → android → ios → web_safari → tv_embedded` before giving up |
+| Robust cookies | file (`cookies/*.txt`), `COOKIES`, `YOUTUBE_COOKIES`, **and** base64 `COOKIES_BASE64` |
+| Proxy support | `YT_PROXY` / `YTDLP_PROXY` / `PROXY_URL` routed through yt-dlp |
+| Better retries | `retries=5`, `fragment_retries=5`, `extractor_retries=3`, `socket_timeout=30`, `geo_bypass` |
+| Clear diagnostics | detects the bot-block and logs exactly how to fix it |
+| Shared opts | `_ytdlp_common_opts()` / `cookie_args()` now feed **download, playlist, formats, size-check and video-URL lookups** |
+| `requirements.txt` | `yt-dlp>=2025.9.5` (older versions lack `js_runtimes`) |
+| `cookies/` | new folder + `README.md`; `cookies/*.txt` git-ignored |
+
+**Verified after fix (this session):**
+- ✅ `js_runtimes`/`remote_components`/`cookie_args()` wired correctly
+- ✅ Audio download → `dQw4w9WgXcQ.mp3` (5,114,349 bytes)
+- ✅ Video download → `dQw4w9WgXcQ.mp4` (29,969,207 bytes, H.264)
+- ✅ Blocked videos correctly retried across 5 clients, then logged the actionable hint
+
+> **The one thing you must do on Railway:** add YouTube cookies (or a proxy).
+> No code change can make a blocked datacenter IP work without them. See the
+> README → *YouTube cookies* / *Can't use an account? Use a proxy*.
+
 ## Deploy on Railway
 
 1. Railway → **New Project** → **Deploy from GitHub repo** → `ZallyMusicBot`.
